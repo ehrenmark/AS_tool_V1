@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirlineSim Airport Map</title>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div id="map"></div>
+
+    <div class="widget-stack">
+        <aside class="widget">
+            <p class="eyebrow">AirlineSim</p>
+            <h1>Airport Map</h1>
+            <p>Zeigt Airports, Aufkommen und deinen gescrapten Flugplan als Punkt-zu-Punkt-Verbindungen.</p>
+        </aside>
+
+        <aside class="widget demand-widget">
+            <p class="eyebrow">Filter</p>
+            <h2>Aufkommen anzeigen</h2>
+            <p class="hint">Passagiere und Cargo sind unabhÃ¤ngige Layer. Jedes Kreuz schaltet nur seine eigene Anzeige.</p>
+
+            <div class="legend">
+                <span><i class="legend-dot passenger-dot"></i>Passagiere</span>
+                <span><i class="legend-dot cargo-dot"></i>Cargo</span>
+                <span><i class="legend-line route-line"></i>Flugplan</span>
+                <span><i class="aircraft-legend">✈</i>Flugzeuge</span>
+            </div>
+
+            <label class="route-toggle">
+                <input type="checkbox" id="routeToggle" checked>
+                <span>Flugplan-Verbindungen anzeigen</span>
+            </label>
+
+            <label class="route-toggle">
+                <input type="checkbox" id="aircraftToggle" checked>
+                <span>Flugzeug-Icons anzeigen</span>
+            </label>
+
+            <div class="filter-group">
+                <div class="filter-heading">
+                    <span>Passagiere</span>
+                    <button class="link-button" type="button" data-toggle-group="passenger">alle umschalten</button>
+                </div>
+                <div class="demand-options" id="passengerFilters"></div>
+            </div>
+
+            <div class="filter-group">
+                <div class="filter-heading">
+                    <span>Cargo</span>
+                    <button class="link-button" type="button" data-toggle-group="cargo">alle umschalten</button>
+                </div>
+                <div class="demand-options" id="cargoFilters"></div>
+            </div>
+
+            <p class="airport-count" id="airportCount">Lade FlughÃ¤fen...</p>
+            <p class="airport-count" id="routeCount">Lade Flugplan...</p>
+        </aside>
+    </div>
+
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
