@@ -60,6 +60,16 @@ class DashboardUiTests(unittest.TestCase):
         self.assertIn("classList.toggle('all-airlines-selected'", script)
         self.assertIn('.field select option.all-airlines-option, .field select.all-airlines-selected { font-weight: 800; }', styles)
 
+    def test_aircraft_move_live_and_periodically_resync(self):
+        script = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+        self.assertIn('requestAnimationFrame(animateAircraftFrame)', script)
+        self.assertIn('interpolateAircraftPosition(origin, destination, progress)', script)
+        self.assertIn("properties.departure_at", script)
+        self.assertIn("properties.arrival_at", script)
+        self.assertIn('setInterval(syncAircraft, AIRCRAFT_SYNC_INTERVAL)', script)
+        self.assertIn("document.addEventListener('visibilitychange'", script)
+
     def test_map_uses_one_click_handler_for_overlapping_layers(self):
         script = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
 

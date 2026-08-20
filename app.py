@@ -497,7 +497,9 @@ def flightplan_aircraft():
     if not DATABASE_PATH.exists():
         return jsonify(result)
     weekday = filters['weekday'] or now.isoweekday()
-    now_minute = filters['minute'] if filters['minute'] is not None else now.hour * 60 + now.minute
+    now_minute = filters['minute'] if filters['minute'] is not None else (
+        now.hour * 60 + now.minute + now.second / 60 + now.microsecond / 60_000_000
+    )
     yesterday = 7 if weekday == 1 else weekday - 1
     connection = connect_database()
     try:
@@ -532,6 +534,11 @@ def flightplan_aircraft():
 
         origin = [row['origin_longitude'], row['origin_latitude']]
         destination = [row['destination_longitude'], row['destination_latitude']]
+        duration_minutes = arrival_minute - departure_minute
+        if duration_minutes <= 0:
+            duration_minutes += 1440
+        departure_at = now - timedelta(minutes=progress * duration_minutes)
+        arrival_at = departure_at + timedelta(minutes=duration_minutes)
         position = interpolate_route_geometry_position(origin, destination, progress)
         bearing_position = interpolate_route_geometry_position(
             origin,
@@ -563,6 +570,10 @@ def flightplan_aircraft():
                     'arrival_time': row['arrival_time'],
                     'progress': round(progress, 3),
                     'bearing': route_bearing(position_for_bearing, bearing_position),
+                    'departure_at': departure_at.isoformat(),
+                    'arrival_at': arrival_at.isoformat(),
+                    'origin_coordinates': origin,
+                    'destination_coordinates': destination,
                 },
             }
         )

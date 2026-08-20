@@ -106,6 +106,11 @@ class AnalysisApiTests(unittest.TestCase):
 
         self.assertEqual([feature['properties']['flight_number'] for feature in body['features']], ['O2'])
         self.assertEqual(body['metadata']['instant'], '11:00')
+        aircraft = body['features'][0]
+        self.assertEqual(aircraft['properties']['departure_at'], '2026-08-04T10:00:00+00:00')
+        self.assertEqual(aircraft['properties']['arrival_at'], '2026-08-04T12:00:00+00:00')
+        self.assertEqual(aircraft['properties']['origin_coordinates'], [-170.0, 10.0])
+        self.assertEqual(aircraft['properties']['destination_coordinates'], [20.0, 30.0])
 
     def test_aircraft_metadata_is_stable_without_database(self):
         with patch('app.DATABASE_PATH', self.database_path.with_name('missing.sqlite3')):

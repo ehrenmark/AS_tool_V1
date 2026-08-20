@@ -4,6 +4,8 @@ mapboxgl.accessToken = 'pk.eyJ1IjoibWFya21vZGUiLCJhIjoiY21zODBnbTkyMDF0ZDM1c2c1d
 
 const EMPTY_GEOJSON = () => ({ type: 'FeatureCollection', features: [] });
 const ALL_AIRLINES = 'all';
+const AIRCRAFT_SYNC_INTERVAL = 30_000;
+const AIRCRAFT_FRAME_INTERVAL = 250;
 const DEMAND_LEVELS = Array.from({ length: 11 }, (_, index) => index);
 const selectedPassengerLevels = new Set(DEMAND_LEVELS);
 const selectedCargoLevels = new Set(DEMAND_LEVELS);
@@ -29,6 +31,7 @@ let permalinkTimer;
 let mapReady = false;
 let selectedAirportId = '';
 let selectedAirportProperties = {};
+let aircraftFrameTime = 0;
 
 const initialParams = new URLSearchParams(location.search);
 const initialCamera = {
@@ -154,6 +157,75 @@ function updateSource(id, data) {
     if (source) source.setData(data);
 }
 
+function interpolateAircraftPosition(origin, destination, progress) {
+    const [originLng, originLat] = origin.map((value) => value * Math.PI / 180);
+    const [destinationLng, destinationLat] = destination.map((value) => value * Math.PI / 180);
+    const cosine = Math.sin(originLat) * Math.sin(destinationLat)
+        + Math.cos(originLat) * Math.cos(destinationLat) * Math.cos(destinationLng - originLng);
+    const distance = Math.acos(Math.max(-1, Math.min(1, cosine)));
+    if (!distance) return [...origin];
+    const startWeight = Math.sin((1 - progress) * distance) / Math.sin(distance);
+    const endWeight = Math.sin(progress * distance) / Math.sin(distance);
+    const x = startWeight * Math.cos(originLat) * Math.cos(originLng)
+        + endWeight * Math.cos(destinationLat) * Math.cos(destinationLng);
+    const y = startWeight * Math.cos(originLat) * Math.sin(originLng)
+        + endWeight * Math.cos(destinationLat) * Math.sin(destinationLng);
+    const z = startWeight * Math.sin(originLat) + endWeight * Math.sin(destinationLat);
+    return [Math.atan2(y, x) * 180 / Math.PI, Math.atan2(z, Math.hypot(x, y)) * 180 / Math.PI];
+}
+
+function aircraftBearing(start, end) {
+    const [startLng, startLat] = start.map((value) => value * Math.PI / 180);
+    const [endLng, endLat] = end.map((value) => value * Math.PI / 180);
+    const deltaLng = endLng - startLng;
+    const x = Math.sin(deltaLng) * Math.cos(endLat);
+    const y = Math.cos(startLat) * Math.sin(endLat)
+        - Math.sin(startLat) * Math.cos(endLat) * Math.cos(deltaLng);
+    return (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;
+}
+
+function animateAircraftFrame(timestamp) {
+    requestAnimationFrame(animateAircraftFrame);
+    if (document.hidden || timestamp - aircraftFrameTime < AIRCRAFT_FRAME_INTERVAL || !aircraftData.features.length) return;
+    aircraftFrameTime = timestamp;
+    const now = Date.now();
+    aircraftData.features = aircraftData.features.filter((feature) => {
+        const properties = feature.properties || {};
+        const departure = Date.parse(properties.departure_at);
+        const arrival = Date.parse(properties.arrival_at);
+        const origin = properties.origin_coordinates;
+        const destination = properties.destination_coordinates;
+        if (!Number.isFinite(departure) || !Number.isFinite(arrival) || arrival <= departure
+            || !Array.isArray(origin) || !Array.isArray(destination)) return true;
+        const progress = (now - departure) / (arrival - departure);
+        if (progress < 0 || progress > 1) return false;
+        const position = interpolateAircraftPosition(origin, destination, progress);
+        const nextPosition = interpolateAircraftPosition(origin, destination, Math.min(1, progress + 0.0001));
+        feature.geometry.coordinates = position;
+        properties.progress = progress;
+        properties.bearing = aircraftBearing(position, nextPosition);
+        return true;
+    });
+    updateSource('flightplan-aircraft', aircraftData);
+}
+
+async function syncAircraft() {
+    if (!elements.airlineSelect.value || !elements.aircraftToggle.checked || document.hidden) return;
+    const query = apiParams().toString();
+    const selection = `${elements.airlineSelect.value}|${elements.comparisonSelect.value}`;
+    const controller = new AbortController();
+    syncAircraft.controller?.abort(); syncAircraft.controller = controller;
+    try {
+        const data = await fetchJson(`/api/flightplan/aircraft?${query}`, 'Flugzeuge', controller.signal);
+        if (selection !== `${elements.airlineSelect.value}|${elements.comparisonSelect.value}`) return;
+        aircraftData = normalizeGeoJson(data);
+        updateSource('flightplan-aircraft', aircraftData);
+        setState(elements.aircraftState, aircraftData.features.length ? `${numberText(aircraftData.features.length)} Flugzeuge aktiv` : 'Keine aktiven Flugzeuge.', aircraftData.features.length ? '' : 'empty');
+    } catch (error) {
+        if (error.name !== 'AbortError') console.error(error);
+    }
+}
+
 function popupNode(properties, type) {
     const root = document.createElement('div');
     if (type === 'route') {
@@ -259,6 +331,7 @@ async function settledApi(path, label, signal) {
 function clearDashboard() {
     dataRequestId += 1;
     loadDashboard.controller?.abort();
+    syncAircraft.controller?.abort();
     routeData = EMPTY_GEOJSON();
     destinationData = EMPTY_GEOJSON();
     aircraftData = EMPTY_GEOJSON();
@@ -553,14 +626,17 @@ async function initialize() {
     addMapData(); mapReady = true;
     if (elements.airlineSelect.value) await loadDashboard(); else clearDashboard();
     const airport = currentAirportFromUrl(); if (airport) openAirport(airport);
+    requestAnimationFrame(animateAircraftFrame);
+    setInterval(syncAircraft, AIRCRAFT_SYNC_INTERVAL);
 }
 
 elements.togglePassenger.addEventListener('click', () => toggleGroup('passenger'));
 elements.toggleCargo.addEventListener('click', () => toggleGroup('cargo'));
 elements.routeToggle.addEventListener('change', () => { updateVisibility(); schedulePermalink(); });
-elements.aircraftToggle.addEventListener('change', () => { updateVisibility(); schedulePermalink(); });
+elements.aircraftToggle.addEventListener('change', () => { updateVisibility(); if (elements.aircraftToggle.checked) syncAircraft(); schedulePermalink(); });
 elements.airlineSelect.addEventListener('change', () => { syncComparisonOptions(); loadDashboard(); schedulePermalink(); });
 elements.comparisonSelect.addEventListener('change', () => { syncComparisonOptions(); loadDashboard(); schedulePermalink(); });
 elements.drawerClose.addEventListener('click', closeDrawer);
 map.on('moveend', () => { if (mapReady) schedulePermalink(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) syncAircraft(); });
 map.on('load', initialize);
