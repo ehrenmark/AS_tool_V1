@@ -3,64 +3,90 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AirlineSim Airport Map</title>
+    <title>AirlineSim Flightplan Map</title>
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <div id="map"></div>
+    <div id="map" aria-label="Flugplan-Karte"></div>
 
-    <div class="widget-stack">
-        <aside class="widget">
-            <p class="eyebrow">AirlineSim</p>
-            <h1>Airport Map</h1>
-            <p>Zeigt Airports, Aufkommen und deinen gescrapten Flugplan als Punkt-zu-Punkt-Verbindungen.</p>
-        </aside>
+    <main class="dashboard" aria-label="Flugplan-Steuerung">
+        <header class="widget brand-widget">
+            <div>
+                <p class="eyebrow">AirlineSim</p>
+                <h1>Flightplan Map</h1>
+            </div>
+        </header>
 
-        <aside class="widget demand-widget">
-            <p class="eyebrow">Filter</p>
-            <h2>Aufkommen anzeigen</h2>
-            <p class="hint">Passagiere und Cargo sind unabhÃ¤ngige Layer. Jedes Kreuz schaltet nur seine eigene Anzeige.</p>
+        <section class="widget control-widget">
+            <div class="section-heading"><div><p class="eyebrow">Auswahl</p><h2>Flugplan vergleichen</h2></div></div>
 
-            <div class="legend">
+            <div class="control-grid">
+                <label class="field" for="airlineSelect">
+                    <span>Primäre Airline</span>
+                    <select id="airlineSelect" disabled><option>Lade Airlines …</option></select>
+                </label>
+                <label class="field" for="comparisonSelect">
+                    <span>Vergleich (optional)</span>
+                    <select id="comparisonSelect" disabled><option value="">Kein Vergleich</option></select>
+                </label>
+            </div>
+
+            <div class="comparison-legend" id="comparisonLegend" hidden>
+                <span><i class="legend-line primary-line"></i>Nur primär</span>
+                <span><i class="legend-line comparison-line"></i>Nur Vergleich</span>
+                <span><i class="legend-line shared-line"></i>Gemeinsam</span>
+            </div>
+            <p class="data-state" id="routeState" role="status">Airline auswählen, um den Flugplan anzuzeigen.</p>
+        </section>
+
+        <section class="widget metrics-widget">
+            <div class="section-heading"><div><p class="eyebrow">Übersicht</p><h2>Kennzahlen</h2></div></div>
+            <div class="kpi-grid" id="kpiGrid" aria-live="polite"></div>
+            <div class="longest-routes">
+                <h3>Längste Routen</h3>
+                <ol id="longestRoutes"></ol>
+            </div>
+            <p class="data-state" id="kpiState" role="status">Airline auswählen, um Kennzahlen anzuzeigen.</p>
+        </section>
+
+        <section class="widget layers-widget">
+            <p class="eyebrow">Kartenebenen</p>
+            <h2>Anzeige filtern</h2>
+            <div class="legend base-legend">
                 <span><i class="legend-dot passenger-dot"></i>Passagiere</span>
                 <span><i class="legend-dot cargo-dot"></i>Cargo</span>
-                <span><i class="legend-line route-line"></i>Flugplan</span>
-                <span><i class="aircraft-legend">✈</i>Flugzeuge</span>
+                <span><i class="aircraft-legend">➤</i>Flugrichtung</span>
+                <span><i class="legend-dot destination-dot"></i>Flugplanziel (nach Aufkommen gefiltert)</span>
             </div>
-
-            <label class="route-toggle">
-                <input type="checkbox" id="routeToggle" checked>
-                <span>Flugplan-Verbindungen anzeigen</span>
-            </label>
-
-            <label class="route-toggle">
-                <input type="checkbox" id="aircraftToggle" checked>
-                <span>Flugzeug-Icons anzeigen</span>
-            </label>
-
+            <div class="toggle-row">
+                <label class="route-toggle"><input type="checkbox" id="routeToggle" checked><span>Routen</span></label>
+                <label class="route-toggle"><input type="checkbox" id="aircraftToggle" checked><span>Flugzeuge</span></label>
+            </div>
             <div class="filter-group">
-                <div class="filter-heading">
-                    <span>Passagiere</span>
-                    <button class="link-button" type="button" data-toggle-group="passenger">alle umschalten</button>
-                </div>
+                <div class="filter-heading"><span>Passagieraufkommen</span><button class="link-button" id="togglePassenger" type="button" aria-controls="passengerFilters">alle ausblenden</button></div>
                 <div class="demand-options" id="passengerFilters"></div>
             </div>
-
             <div class="filter-group">
-                <div class="filter-heading">
-                    <span>Cargo</span>
-                    <button class="link-button" type="button" data-toggle-group="cargo">alle umschalten</button>
-                </div>
+                <div class="filter-heading"><span>Cargoaufkommen</span><button class="link-button" id="toggleCargo" type="button" aria-controls="cargoFilters">alle ausblenden</button></div>
                 <div class="demand-options" id="cargoFilters"></div>
             </div>
+            <p class="data-state" id="airportCount" role="status">Flughäfen werden geladen …</p>
+            <p class="data-state" id="destinationState" role="status">Airline auswählen, um Ziele anzuzeigen.</p>
+            <p class="data-state" id="aircraftState" role="status">Airline auswählen, um Flugzeuge anzuzeigen.</p>
+        </section>
+    </main>
 
-            <p class="airport-count" id="airportCount">Lade FlughÃ¤fen...</p>
-            <p class="airport-count" id="routeCount">Lade Flugplan...</p>
-        </aside>
-    </div>
+    <aside class="airport-drawer" id="airportDrawer" aria-labelledby="drawerTitle" aria-hidden="true">
+        <button class="drawer-close" id="drawerClose" type="button" aria-label="Flughafendetails schließen">×</button>
+        <p class="eyebrow">Flughafen</p>
+        <h2 id="drawerTitle">Details</h2>
+        <div id="drawerContent"></div>
+        <p class="data-state" id="drawerState" role="status"></p>
+    </aside>
 
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+    <script src="{{ url_for('static', filename='js/demand-filters.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

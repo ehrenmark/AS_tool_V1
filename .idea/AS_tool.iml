@@ -7,12 +7,9 @@
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
     </content>
-    <orderEntry type="jdk" jdkName="~\PycharmProjects\AS_tool\.venv" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="D:\GitHub\AS_tool_V1\.venv" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
-  <component name="PackageRequirementsSettings" />
-  <component name="PyDocumentationSettings" />
-  <component name="ReSTService" />
   <component name="TemplatesService">
     <option name="TEMPLATE_CONFIGURATION" value="Jinja2" />
     <option name="TEMPLATE_FOLDERS">
@@ -21,5 +18,4 @@
       </list>
     </option>
   </component>
-  <component name="TestRunnerService" />
 </module>

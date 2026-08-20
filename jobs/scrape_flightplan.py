@@ -2,9 +2,11 @@ import argparse
 import os
 import re
 import sqlite3
+import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
-from urllib.parse import urljoin
+from typing import Any, Callable
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -95,6 +97,20 @@ DO UPDATE SET
 """
 
 AIRPORT_ID_PATTERN = re.compile(r"airports/(\d+)")
+ENTERPRISE_PATH_PATTERN = re.compile(r"^/app/info/enterprises/(\d+)/?$")
+
+
+@dataclass
+class ScrapeResult:
+    enterprises_total: int
+    enterprises_succeeded: int
+    enterprises_failed: int
+    flights_imported: int
+    routes_imported: int
+    failures: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def normalize_text(value: str) -> str:
@@ -114,7 +130,69 @@ def ensure_table(connection: sqlite3.Connection) -> None:
 
 
 def build_flightplan_url(base_url: str, enterprise_id: int) -> str:
-    return urljoin(base_url, f"/app/info/enterprises/{enterprise_id}?&tab=3")
+    return urljoin(base_url, f"/app/info/enterprises/{enterprise_id}?tab=3")
+
+
+def build_enterprise_directory_url(base_url: str, letter: str | None = None) -> str:
+    url = urljoin(base_url, "/app/info/enterprises")
+    return f"{url}?{urlencode({'letter': letter})}" if letter else url
+
+
+def parse_directory_letters(base_url: str, html: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    letters = set()
+    for anchor in soup.select("a[href]"):
+        url = urlparse(urljoin(base_url, anchor.get("href", "")))
+        query = parse_qs(url.query)
+        letter = query.get("letter", [""])[0].strip().upper()
+        if url.path == "/app/info/enterprises" and len(letter) == 1 and letter.isalpha():
+            letters.add(letter)
+    return sorted(letters)
+
+
+def parse_enterprise_directory(base_url: str, html: str) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.select_one("table.enterprises")
+    empty_message = "No entries exist for the selected letter" in soup.get_text(" ", strip=True)
+    if table is None:
+        if empty_message:
+            return []
+        raise ValueError("Enterprise-Tabelle im Verzeichnis nicht gefunden")
+
+    enterprises = {}
+    for anchor in table.select("tbody a[href]"):
+        path = urlparse(urljoin(base_url, anchor.get("href", ""))).path
+        match = ENTERPRISE_PATH_PATTERN.fullmatch(path)
+        name = normalize_text(anchor.get_text())
+        if match and name:
+            enterprise_id = int(match.group(1))
+            enterprises[enterprise_id] = name
+    result = [
+        {"enterprise_id": enterprise_id, "enterprise_name": name}
+        for enterprise_id, name in sorted(enterprises.items(), key=lambda item: item[1].casefold())
+    ]
+    if not result and not empty_message:
+        raise ValueError("Keine gültigen Enterprises in der Verzeichnis-Tabelle gefunden")
+    return result
+
+
+def discover_enterprises(session: requests.Session, base_url: str, timeout: int) -> list[dict[str, Any]]:
+    directory_url = build_enterprise_directory_url(base_url)
+    response = session.get(directory_url, timeout=timeout)
+    response.raise_for_status()
+    letters = parse_directory_letters(directory_url, response.text)
+    if not letters:
+        raise ValueError("Keine Buchstaben im Enterprise-Verzeichnis gefunden")
+
+    enterprises = {}
+    for letter in letters:
+        response = session.get(build_enterprise_directory_url(base_url, letter), timeout=timeout)
+        response.raise_for_status()
+        for enterprise in parse_enterprise_directory(response.url, response.text):
+            enterprises[enterprise["enterprise_id"]] = enterprise
+    if not enterprises:
+        raise ValueError("Keine Enterprises im Verzeichnis gefunden")
+    return sorted(enterprises.values(), key=lambda item: item["enterprise_name"].casefold())
 
 
 def extract_enterprise_name(soup: BeautifulSoup) -> str | None:
@@ -181,13 +259,22 @@ def parse_flight_row(
     }
 
 
-def parse_flightplan(enterprise_id: int, source_url: str, html: str) -> list[dict[str, Any]]:
+def parse_flightplan(
+    enterprise_id: int,
+    source_url: str,
+    html: str,
+    enterprise_name: str | None = None,
+) -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table")
     if not table:
-        raise ValueError("Keine Flugplan-Tabelle gefunden")
+        page_text = soup.get_text(" ", strip=True)
+        title_name = extract_enterprise_name(soup)
+        if title_name and "Flight schedule" in page_text:
+            return []
+        raise ValueError("Unerwartete Flugplan-Seite ohne Tabelle")
 
-    enterprise_name = extract_enterprise_name(soup)
+    enterprise_name = extract_enterprise_name(soup) or enterprise_name
     origin: dict[str, Any] | None = None
     destination: dict[str, Any] | None = None
     flights: list[dict[str, Any]] = []
@@ -204,40 +291,172 @@ def parse_flightplan(enterprise_id: int, source_url: str, html: str) -> list[dic
             if flight:
                 flights.append(flight)
 
+    if not flights:
+        raise ValueError("Keine gültigen Flugplan-Zeilen in der Tabelle gefunden")
     return flights
+
+
+def fetch_flightplan(
+    session: requests.Session,
+    base_url: str,
+    enterprise_id: int,
+    enterprise_name: str | None,
+    timeout: int,
+) -> list[dict[str, Any]]:
+    source_url = build_flightplan_url(base_url, enterprise_id)
+    response = session.get(source_url, timeout=timeout)
+    response.raise_for_status()
+    return parse_flightplan(enterprise_id, response.url, response.text, enterprise_name)
+
+
+def store_flightplan(
+    connection: sqlite3.Connection,
+    enterprise_id: int,
+    flights: list[dict[str, Any]],
+    replace: bool,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+) -> None:
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if transaction_guard:
+            transaction_guard(connection)
+        if replace:
+            connection.execute(
+                "DELETE FROM flightplan_flights WHERE enterprise_id = ?",
+                (enterprise_id,),
+            )
+        if flights:
+            connection.executemany(UPSERT_SQL, flights)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def scrape_enterprises(
+    db_path: Path,
+    enterprises: list[dict[str, Any]],
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: int = 60,
+    request_delay: float = 0.25,
+    user_agent: str = DEFAULT_USER_AGENT,
+    replace: bool = True,
+    reject_empty: bool = False,
+    session: requests.Session | None = None,
+    progress_callback: Callable[[], None] | None = None,
+) -> ScrapeResult:
+    session = session or requests.Session()
+    session.headers.update({"User-Agent": user_agent})
+    connection = connect_to_sqlite(db_path)
+    total_flights = 0
+    total_routes = 0
+    successful_enterprises = 0
+    failures = []
+    try:
+        ensure_table(connection)
+        for index, enterprise in enumerate(enterprises):
+            enterprise_id = enterprise["enterprise_id"]
+            enterprise_name = enterprise["enterprise_name"]
+            try:
+                flights = fetch_flightplan(
+                    session,
+                    base_url,
+                    enterprise_id,
+                    enterprise_name,
+                    timeout,
+                )
+                if reject_empty and not flights:
+                    raise ValueError("Keine Flüge im Flugplan gefunden")
+                if progress_callback:
+                    progress_callback()
+                transaction_guard = getattr(progress_callback, "assert_transaction", None)
+                store_flightplan(
+                    connection, enterprise_id, flights, replace,
+                    transaction_guard=transaction_guard,
+                )
+                successful_enterprises += 1
+                total_flights += len(flights)
+                total_routes += len({
+                    (flight["origin_airport_id"], flight["destination_airport_id"])
+                    for flight in flights
+                })
+            except (requests.RequestException, ValueError, sqlite3.Error) as error:
+                connection.rollback()
+                failures.append(f"{enterprise_name or enterprise_id}: {error}")
+
+            if progress_callback:
+                progress_callback()
+            if index < len(enterprises) - 1:
+                time.sleep(request_delay)
+    finally:
+        connection.close()
+
+    return ScrapeResult(
+        enterprises_total=len(enterprises),
+        enterprises_succeeded=successful_enterprises,
+        enterprises_failed=len(failures),
+        flights_imported=total_flights,
+        routes_imported=total_routes,
+        failures=failures,
+    )
+
+
+def scrape_all_enterprises(
+    db_path: Path,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: int = 60,
+    request_delay: float = 0.25,
+    user_agent: str = DEFAULT_USER_AGENT,
+    session: requests.Session | None = None,
+    progress_callback: Callable[[], None] | None = None,
+) -> ScrapeResult:
+    session = session or requests.Session()
+    session.headers.update({"User-Agent": user_agent})
+    enterprises = discover_enterprises(session, base_url, timeout)
+    return scrape_enterprises(
+        db_path,
+        enterprises,
+        base_url=base_url,
+        timeout=timeout,
+        request_delay=request_delay,
+        user_agent=user_agent,
+        replace=True,
+        session=session,
+        progress_callback=progress_callback,
+    )
 
 
 def scrape_flightplan(args: argparse.Namespace) -> None:
     db_path = Path(args.db_path).expanduser().resolve()
-    source_url = build_flightplan_url(args.base_url, args.enterprise_id)
+    if args.all_enterprises:
+        result = scrape_all_enterprises(
+            db_path,
+            base_url=args.base_url,
+            timeout=args.timeout,
+            request_delay=args.request_delay,
+            user_agent=args.user_agent,
+        )
+    else:
+        result = scrape_enterprises(
+            db_path,
+            [{"enterprise_id": args.enterprise_id, "enterprise_name": None}],
+            base_url=args.base_url,
+            timeout=args.timeout,
+            request_delay=0,
+            user_agent=args.user_agent,
+            replace=args.replace,
+            reject_empty=True,
+        )
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": args.user_agent})
-    response = session.get(source_url, timeout=args.timeout)
-    response.raise_for_status()
-
-    flights = parse_flightplan(args.enterprise_id, source_url, response.text)
-    if not flights:
-        raise ValueError("Keine Flüge im Flugplan gefunden")
-
-    connection = connect_to_sqlite(db_path)
-    try:
-        ensure_table(connection)
-        if args.replace:
-            connection.execute(
-                "DELETE FROM flightplan_flights WHERE enterprise_id = ?",
-                (args.enterprise_id,),
-            )
-        connection.executemany(UPSERT_SQL, flights)
-        connection.commit()
-    finally:
-        connection.close()
-
-    route_count = len({(f["origin_airport_id"], f["destination_airport_id"]) for f in flights})
     print(
-        f"Fertig: {len(flights)} Flüge und {route_count} Routen gespeichert. "
+        f"Fertig: {result.flights_imported} Flüge und {result.routes_imported} Routen von "
+        f"{result.enterprises_succeeded}/{result.enterprises_total} Enterprises verarbeitet. "
         f"Datenbank: {db_path}"
     )
+    if result.failures:
+        raise RuntimeError("Fehler bei einzelnen Enterprises:\n- " + "\n- ".join(result.failures))
 
 
 def parse_args() -> argparse.Namespace:
@@ -245,6 +464,11 @@ def parse_args() -> argparse.Namespace:
         description="Scraped den AirlineSim-Flugplan einer Enterprise in SQLite."
     )
     parser.add_argument("--enterprise-id", type=int, default=DEFAULT_ENTERPRISE_ID)
+    parser.add_argument(
+        "--all-enterprises",
+        action="store_true",
+        help="Alle Enterprises aus dem öffentlichen Server-Verzeichnis verarbeiten",
+    )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument(
         "--db-path",
@@ -252,6 +476,12 @@ def parse_args() -> argparse.Namespace:
         help="Pfad zur SQLite-Datenbankdatei",
     )
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument(
+        "--request-delay",
+        type=float,
+        default=0.25,
+        help="Pause zwischen Flugplan-Anfragen im Alle-Enterprises-Modus",
+    )
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     parser.add_argument(
         "--replace",
