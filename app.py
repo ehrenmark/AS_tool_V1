@@ -1,4 +1,5 @@
 import math
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -232,7 +233,7 @@ def load_flights(connection, filters, require_coordinates=False):
     if require_coordinates and not {'latitude', 'longitude'} <= airport_columns:
         return []
     names = ['enterprise_name', 'flight_number', 'frequency', 'departure_time',
-             'arrival_time', 'aircraft_type', 'origin_iata', 'origin_name',
+             'arrival_time', 'aircraft_type', 'remarks', 'origin_iata', 'origin_name',
              'destination_iata', 'destination_name']
     select_optional = ', '.join(optional_expression(columns, name) for name in names)
     where, parameters = ['f.enterprise_id IS NOT NULL'], []
@@ -244,17 +245,22 @@ def load_flights(connection, filters, require_coordinates=False):
     origin_longitude = 'origin.longitude' if 'longitude' in airport_columns else 'NULL'
     destination_latitude = 'destination.latitude' if 'latitude' in airport_columns else 'NULL'
     destination_longitude = 'destination.longitude' if 'longitude' in airport_columns else 'NULL'
+    origin_timezone = 'origin.timezone' if 'timezone' in airport_columns else "'UTC'"
+    destination_timezone = 'destination.timezone' if 'timezone' in airport_columns else "'UTC'"
     sql = f'''SELECT f.enterprise_id, f.origin_airport_id, f.destination_airport_id,
                      {select_optional},
                      {origin_latitude} AS origin_latitude, {origin_longitude} AS origin_longitude,
                      {destination_latitude} AS destination_latitude,
-                     {destination_longitude} AS destination_longitude
+                     {destination_longitude} AS destination_longitude,
+                     {origin_timezone} AS origin_timezone,
+                     {destination_timezone} AS destination_timezone
               FROM flightplan_flights f
               LEFT JOIN airports origin ON origin.airport_id=f.origin_airport_id
               LEFT JOIN airports destination ON destination.airport_id=f.destination_airport_id'''
     if where:
         sql += ' WHERE ' + ' AND '.join(where)
     rows = [dict(row) for row in connection.execute(sql, parameters)]
+    rows = [row for row in rows if not is_via_summary(row)]
     if filters['weekday'] is not None:
         day = str(filters['weekday'])
         rows = [row for row in rows if day in (row.get('frequency') or '')]
@@ -262,6 +268,10 @@ def load_flights(connection, filters, require_coordinates=False):
         rows = [row for row in rows if all(row.get(key) is not None for key in
                 ('origin_latitude', 'origin_longitude', 'destination_latitude', 'destination_longitude'))]
     return rows
+
+
+def is_via_summary(row):
+    return bool(re.search(r'\bvia\b', row.get('remarks') or '', re.IGNORECASE))
 
 
 def airline_summary(rows):
@@ -447,40 +457,75 @@ def parse_time_to_minutes(value):
     return hours * 60 + minutes if 0 <= hours < 24 and 0 <= minutes < 60 else None
 
 
-def is_flight_active(departure_minute, arrival_minute, now_minute):
-    duration = arrival_minute - departure_minute
-    if duration <= 0:
-        duration += 24 * 60
-
-    elapsed = now_minute - departure_minute
-    if elapsed < 0:
-        elapsed += 24 * 60
-
-    if elapsed > duration:
-        return None
-    return elapsed / duration
+def parse_utc_offset(value):
+    if not value or value.strip().upper() == 'UTC':
+        return timezone.utc
+    match = re.fullmatch(r'UTC\s*([+-])\s*(\d{2}):(\d{2})', value.strip(), re.IGNORECASE)
+    if not match:
+        return timezone.utc
+    hours, minutes = int(match.group(2)), int(match.group(3))
+    offset = timedelta(hours=hours, minutes=minutes)
+    return timezone(offset if match.group(1) == '+' else -offset)
 
 
-def next_flight_occurrence(row, now, event):
+def flight_occurrence(row, departure_date):
     departure_minute = parse_time_to_minutes(row.get('departure_time'))
     arrival_minute = parse_time_to_minutes(row.get('arrival_time'))
     if departure_minute is None or arrival_minute is None:
         return None
+    midnight = datetime.combine(departure_date, datetime.min.time())
+    departure = (midnight + timedelta(minutes=departure_minute)).replace(
+        tzinfo=parse_utc_offset(row.get('origin_timezone'))
+    ).astimezone(timezone.utc)
+    arrival_local = (midnight + timedelta(minutes=arrival_minute)).replace(
+        tzinfo=parse_utc_offset(row.get('destination_timezone'))
+    )
+    arrival = arrival_local.astimezone(timezone.utc)
+    while arrival <= departure:
+        arrival_local += timedelta(days=1)
+        arrival = arrival_local.astimezone(timezone.utc)
+    return departure, arrival
+
+
+def reference_instant(now, filters):
+    instant = now
+    if filters['weekday'] is not None:
+        instant += timedelta(days=filters['weekday'] - instant.isoweekday())
+    if filters['minute'] is not None:
+        instant = instant.replace(
+            hour=filters['minute'] // 60, minute=filters['minute'] % 60,
+            second=0, microsecond=0,
+        )
+    return instant
+
+
+def active_flight_occurrence(row, instant):
+    flight_days = {int(day) for day in (row.get('frequency') or '') if day in '1234567'}
+    for day_offset in range(-2, 2):
+        departure_date = instant.date() + timedelta(days=day_offset)
+        if departure_date.isoweekday() not in flight_days:
+            continue
+        occurrence = flight_occurrence(row, departure_date)
+        if occurrence and occurrence[0] <= instant <= occurrence[1]:
+            return occurrence
+    return None
+
+
+def next_flight_occurrence(row, now, event):
     flight_days = {int(day) for day in (row.get('frequency') or '') if day in '1234567'}
     if not flight_days:
         return None
-    arrival_day_offset = 1 if arrival_minute <= departure_minute else 0
-    start = now - timedelta(days=1) if event == 'arrival' else now
-    for day_offset in range(9):
-        departure_date = (start + timedelta(days=day_offset)).date()
+    candidates = []
+    for day_offset in range(-2, 10):
+        departure_date = now.date() + timedelta(days=day_offset)
         if departure_date.isoweekday() not in flight_days:
             continue
-        minute = arrival_minute if event == 'arrival' else departure_minute
-        event_date = departure_date + timedelta(days=arrival_day_offset if event == 'arrival' else 0)
-        occurrence = datetime.combine(event_date, datetime.min.time(), timezone.utc) + timedelta(minutes=minute)
-        if occurrence >= now:
-            return occurrence
-    return None
+        occurrence = flight_occurrence(row, departure_date)
+        if occurrence:
+            instant = occurrence[1 if event == 'arrival' else 0]
+            if instant >= now:
+                candidates.append(instant)
+    return min(candidates) if candidates else None
 
 
 @app.route('/api/flightplan/aircraft')
@@ -496,11 +541,7 @@ def flightplan_aircraft():
     result['metadata']['instant'] = filters['time'] or now.strftime('%H:%M')
     if not DATABASE_PATH.exists():
         return jsonify(result)
-    weekday = filters['weekday'] or now.isoweekday()
-    now_minute = filters['minute'] if filters['minute'] is not None else (
-        now.hour * 60 + now.minute + now.second / 60 + now.microsecond / 60_000_000
-    )
-    yesterday = 7 if weekday == 1 else weekday - 1
+    instant = reference_instant(now, filters)
     connection = connect_database()
     try:
         query_filters = dict(filters)
@@ -511,34 +552,15 @@ def flightplan_aircraft():
     aircraft_features = []
     active_rows = []
     for row in rows:
-        departure_minute = parse_time_to_minutes(row['departure_time'])
-        arrival_minute = parse_time_to_minutes(row['arrival_time'])
-        if departure_minute is None or arrival_minute is None:
+        occurrence = active_flight_occurrence(row, instant)
+        if occurrence is None:
             continue
-
-        flight_days = row.get('frequency') or ''
-        arrival_is_next_day = arrival_minute <= departure_minute
-        today_active = str(weekday) in flight_days and now_minute >= departure_minute
-        if not arrival_is_next_day:
-            today_active = str(weekday) in flight_days
-        previous_overnight = arrival_is_next_day and str(yesterday) in flight_days and now_minute <= arrival_minute
-        if not today_active and not previous_overnight:
-            continue
-        progress = is_flight_active(departure_minute, arrival_minute, now_minute)
-        if previous_overnight:
-            duration = arrival_minute + 1440 - departure_minute
-            progress = (now_minute + 1440 - departure_minute) / duration
-        if progress is None:
-            continue
+        departure_at, arrival_at = occurrence
+        progress = (instant - departure_at) / (arrival_at - departure_at)
         active_rows.append(row)
 
         origin = [row['origin_longitude'], row['origin_latitude']]
         destination = [row['destination_longitude'], row['destination_latitude']]
-        duration_minutes = arrival_minute - departure_minute
-        if duration_minutes <= 0:
-            duration_minutes += 1440
-        departure_at = now - timedelta(minutes=progress * duration_minutes)
-        arrival_at = departure_at + timedelta(minutes=duration_minutes)
         position = interpolate_route_geometry_position(origin, destination, progress)
         bearing_position = interpolate_route_geometry_position(
             origin,

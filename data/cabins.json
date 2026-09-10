@@ -1,0 +1,197 @@
+{
+  "exported_at": "2026-09-10T12:33:30+00:00",
+  "source_url": "https://quimby.airlinesim.aero/app/seating?0",
+  "configurations": [
+    {
+      "name": "KaiTak1",
+      "aircraft_type": "Airbus A321neo light",
+      "overview": {
+        "column_1": "KaiTak1",
+        "column_2": "138 Leisure Plus",
+        "column_3": "42 Recliner Shorthaul",
+        "column_4": "5 Lie-Flat 140",
+        "column_5": "185",
+        "column_6": "4",
+        "column_7": "2 / 3 / 1",
+        "column_8": "10",
+        "column_9": "212.200 AS$",
+        "column_10": "default delete edit"
+      },
+      "editor_url": "https://quimby.airlinesim.aero/app/seating/editor/3422",
+      "details": {
+        "source_url": "https://quimby.airlinesim.aero/app/seating/editor/3422?1",
+        "summary": {
+          "Konfigurationsstatus": "ok",
+          "Flugzeugtyp": "Airbus A321neo light",
+          "Gesamtpreis": "212.200 AS$",
+          "Zertifizierte Passagierkapazität": "240",
+          "Gesamtpassagierkapazität": "185",
+          "Verfügbare Jumpseats": "10",
+          "Flugbegleiter": "10"
+        },
+        "form_values": {
+          "summary:name": "KaiTak1",
+          "editor:deck:cabins:0:fas": "1",
+          "editor:deck:cabins:0:seats": "5",
+          "editor:deck:cabins:0:extraPitch": "0",
+          "editor:deck:cabins:1:fas": "3",
+          "editor:deck:cabins:1:seats": "42",
+          "editor:deck:cabins:1:extraPitch": "1",
+          "editor:deck:cabins:2:fas": "2",
+          "editor:deck:cabins:2:seats": "138",
+          "editor:deck:cabins:2:extraPitch": "0"
+        },
+        "cabins": [
+          {
+            "class": "First Class (F)",
+            "fields": {
+              "Sitz": "Lie-Flat 140 [ auswählen ]",
+              "Maximale Reihen": "18",
+              "Sitze/Reihe": "5",
+              "Preis/Sitz": "4.400 AS$",
+              "Zusätzliche F/As": "0 1 2 3 4 5 6"
+            },
+            "form_values": {
+              "editor:deck:cabins:0:fas": "1",
+              "editor:deck:cabins:0:seats": "5",
+              "editor:deck:cabins:0:extraPitch": "0"
+            }
+          },
+          {
+            "class": "Business Class (C)",
+            "fields": {
+              "Sitz": "Recliner Shorthaul [ auswählen ]",
+              "Maximale Reihen": "24",
+              "Sitze/Reihe": "6",
+              "Preis/Sitz": "1.900 AS$",
+              "Zusätzliche F/As": "0 1 2 3 4 5 6"
+            },
+            "form_values": {
+              "editor:deck:cabins:1:fas": "3",
+              "editor:deck:cabins:1:seats": "42",
+              "editor:deck:cabins:1:extraPitch": "1"
+            }
+          },
+          {
+            "class": "Economy Class (Y)",
+            "fields": {
+              "Sitz": "Leisure Plus [ auswählen ]",
+              "Maximale Reihen": "35",
+              "Sitze/Reihe": "6",
+              "Preis/Sitz": "800 AS$",
+              "Zusätzliche F/As": "0 1 2 3 4 5 6"
+            },
+            "form_values": {
+              "editor:deck:cabins:2:fas": "2",
+              "editor:deck:cabins:2:seats": "138",
+              "editor:deck:cabins:2:extraPitch": "0"
+            }
+          }
+        ],
+        "tables": [
+          [
+            {
+              "column_1": "Konfigurationsname",
+              "column_2": "",
+              "column_3": "Konfigurationsstatus",
+              "column_4": "ok"
+            },
+            {
+              "column_1": "Flugzeugtyp",
+              "column_2": "Airbus A321neo light",
+              "column_3": "Gesamtpreis",
+              "column_4": "212.200 AS$"
+            },
+            {
+              "column_1": "Zertifizierte Passagierkapazität",
+              "column_2": "240",
+              "column_3": "Gesamtpassagierkapazität",
+              "column_4": "185"
+            },
+            {
+              "column_1": "Verfügbare Jumpseats",
+              "column_2": "10",
+              "column_3": "Flugbegleiter",
+              "column_4": "10"
+            }
+          ],
+          [
+            {
+              "column_1": "Sitz",
+              "column_2": "Lie-Flat 140 [ auswählen ]",
+              "column_3": "Maximale Reihen",
+              "column_4": "18",
+              "column_5": "Sitze/Reihe",
+              "column_6": "5",
+              "column_7": "Preis/Sitz",
+              "column_8": "4.400 AS$",
+              "column_9": "Zusätzliche F/As",
+              "column_10": "0 1 2 3 4 5 6"
+            },
+            {
+              "column_1": "",
+              "column_2": "Reihen",
+              "column_3": "1",
+              "column_4": "Sitze/Kabine",
+              "column_5": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90",
+              "column_6": "Preis/Kabine",
+              "column_7": "22.000 AS$",
+              "column_8": "Zus. Sitzabstand (in)",
+              "column_9": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20"
+            }
+          ],
+          [
+            {
+              "column_1": "Sitz",
+              "column_2": "Recliner Shorthaul [ auswählen ]",
+              "column_3": "Maximale Reihen",
+              "column_4": "24",
+              "column_5": "Sitze/Reihe",
+              "column_6": "6",
+              "column_7": "Preis/Sitz",
+              "column_8": "1.900 AS$",
+              "column_9": "Zusätzliche F/As",
+              "column_10": "0 1 2 3 4 5 6"
+            },
+            {
+              "column_1": "",
+              "column_2": "Reihen",
+              "column_3": "7",
+              "column_4": "Sitze/Kabine",
+              "column_5": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144",
+              "column_6": "Preis/Kabine",
+              "column_7": "79.800 AS$",
+              "column_8": "Zus. Sitzabstand (in)",
+              "column_9": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20"
+            }
+          ],
+          [
+            {
+              "column_1": "Sitz",
+              "column_2": "Leisure Plus [ auswählen ]",
+              "column_3": "Maximale Reihen",
+              "column_4": "35",
+              "column_5": "Sitze/Reihe",
+              "column_6": "6",
+              "column_7": "Preis/Sitz",
+              "column_8": "800 AS$",
+              "column_9": "Zusätzliche F/As",
+              "column_10": "0 1 2 3 4 5 6"
+            },
+            {
+              "column_1": "",
+              "column_2": "Reihen",
+              "column_3": "23",
+              "column_4": "Sitze/Kabine",
+              "column_5": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210",
+              "column_6": "Preis/Kabine",
+              "column_7": "110.400 AS$",
+              "column_8": "Zus. Sitzabstand (in)",
+              "column_9": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20"
+            }
+          ]
+        ]
+      }
+    }
+  ]
+}

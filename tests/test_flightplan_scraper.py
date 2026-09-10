@@ -2,6 +2,7 @@ import sqlite3
 import unittest
 
 from jobs.scrape_flightplan import (
+    ensure_table,
     parse_directory_letters,
     parse_enterprise_directory,
     parse_flightplan,
@@ -10,6 +11,38 @@ from jobs.scrape_flightplan import (
 
 
 class FlightplanScraperTests(unittest.TestCase):
+    def test_via_flight_number_keeps_summary_and_both_legs(self):
+        connection = sqlite3.connect(':memory:')
+        ensure_table(connection)
+        base = {
+            'enterprise_id': 74, 'enterprise_name': 'Hummingbird',
+            'flight_number': 'HMB 1365', 'frequency': '1234567',
+            'aircraft_type': '351', 'operator': '', 'validity': '',
+            'source_url': 'https://example.test/flightplan',
+        }
+        flights = [
+            {**base, 'departure_time': '18:40', 'arrival_time': '01:15', 'remarks': '',
+             'origin_airport_id': 1, 'origin_iata': 'LAX', 'origin_name': 'Los Angeles',
+             'destination_airport_id': 2, 'destination_iata': 'ATL', 'destination_name': 'Atlanta'},
+            {**base, 'departure_time': '05:20', 'arrival_time': '06:52', 'remarks': '',
+             'origin_airport_id': 2, 'origin_iata': 'ATL', 'origin_name': 'Atlanta',
+             'destination_airport_id': 3, 'destination_iata': 'MIA', 'destination_name': 'Miami'},
+            {**base, 'departure_time': '21:40', 'arrival_time': '06:52', 'remarks': 'via ATL',
+             'origin_airport_id': 1, 'origin_iata': 'LAX', 'origin_name': 'Los Angeles',
+             'destination_airport_id': 3, 'destination_iata': 'MIA', 'destination_name': 'Miami'},
+        ]
+
+        store_flightplan(connection, 74, flights, replace=True)
+
+        rows = connection.execute(
+            'SELECT flight_number, origin_iata, destination_iata, remarks '
+            'FROM flightplan_flights ORDER BY origin_iata, destination_iata'
+        ).fetchall()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({row[0] for row in rows}, {'HMB 1365'})
+        self.assertIn(('HMB 1365', 'LAX', 'MIA', 'via ATL'), rows)
+        connection.close()
+
     def test_directory_letters_are_discovered(self):
         html = """
             <a href="./enterprises?letter=A">A</a>

@@ -112,6 +112,82 @@ class AnalysisApiTests(unittest.TestCase):
         self.assertEqual(aircraft['properties']['origin_coordinates'], [-170.0, 10.0])
         self.assertEqual(aircraft['properties']['destination_coordinates'], [20.0, 30.0])
 
+    def test_aircraft_times_are_converted_from_airport_timezones_to_utc(self):
+        connection = sqlite3.connect(self.database_path)
+        connection.executescript("""
+            ALTER TABLE airports ADD COLUMN timezone TEXT;
+            UPDATE airports SET timezone='UTC';
+            INSERT INTO airports VALUES
+                (4, 'NYC', 'KNYC', 'US', 40.7, -74, 'UTC - 05:00'),
+                (5, 'BER', 'EDDB', 'DE', 52.5, 13.4, 'UTC + 01:00');
+            INSERT INTO flightplan_flights VALUES
+                (4, 'West Air', 'W1', '1', '10:00', '12:00', 'A330',
+                 5, 'BER', 'Berlin', 4, 'NYC', 'New York'),
+                (5, 'East Air', 'E1', '1', '08:00', '16:00', 'A330',
+                 4, 'NYC', 'New York', 5, 'BER', 'Berlin');
+        """)
+        connection.commit()
+        connection.close()
+
+        west = self.client.get(
+            '/api/flightplan/aircraft?enterprise_id=4&weekday=1&time=13:00'
+        ).get_json()['features'][0]['properties']
+        east = self.client.get(
+            '/api/flightplan/aircraft?enterprise_id=5&weekday=1&time=14:00'
+        ).get_json()['features'][0]['properties']
+
+        self.assertEqual(west['departure_at'][11:19], '09:00:00')
+        self.assertEqual(west['arrival_at'][11:19], '17:00:00')
+        self.assertAlmostEqual(west['progress'], .5)
+        self.assertEqual(east['departure_at'][11:19], '13:00:00')
+        self.assertEqual(east['arrival_at'][11:19], '15:00:00')
+        self.assertAlmostEqual(east['progress'], .5)
+
+        class Monday(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 8, 3, 8, 0, tzinfo=timezone.utc)
+
+        with patch('app.datetime', Monday):
+            detail = self.client.get(
+                '/api/airports/5/flightplan?enterprise_id=4'
+            ).get_json()
+        self.assertEqual(detail['departing'][0]['next_departure_at'],
+                         '2026-08-03T09:00:00+00:00')
+
+    def test_via_summary_is_not_counted_as_an_additional_flight(self):
+        connection = sqlite3.connect(self.database_path)
+        connection.execute('ALTER TABLE flightplan_flights ADD COLUMN remarks TEXT')
+        connection.executemany('''
+            INSERT INTO flightplan_flights
+            (enterprise_id, enterprise_name, flight_number, frequency, departure_time,
+             arrival_time, aircraft_type, origin_airport_id, origin_iata, origin_name,
+             destination_airport_id, destination_iata, destination_name, remarks)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ''', [
+            (74, 'Hummingbird', 'HMB 1365', '1', '08:00', '10:00', '351',
+             1, 'AAA', 'Alpha', 2, 'BBB', 'Beta', ''),
+            (74, 'Hummingbird', 'HMB 1365', '1', '10:30', '12:00', '351',
+             2, 'BBB', 'Beta', 3, 'CCC', 'Gamma', ''),
+            (74, 'Hummingbird', 'HMB 1365', '1', '08:00', '12:00', '351',
+             1, 'AAA', 'Alpha', 3, 'CCC', 'Gamma', 'via BBB'),
+        ])
+        connection.commit()
+        connection.close()
+
+        kpis = self.client.get('/api/flightplan/kpis?enterprise_id=74&weekday=1').get_json()['data']
+        routes = self.client.get('/api/flightplan/routes?enterprise_id=74&weekday=1').get_json()
+        aircraft = self.client.get(
+            '/api/flightplan/aircraft?enterprise_id=74&weekday=1&time=09:00'
+        ).get_json()['features']
+
+        self.assertEqual(kpis['flights'], 2)
+        self.assertEqual(kpis['routes'], 2)
+        self.assertEqual(len(routes['features']), 2)
+        self.assertEqual(len(aircraft), 1)
+        self.assertEqual(aircraft[0]['properties']['origin_iata'], 'AAA')
+        self.assertEqual(aircraft[0]['properties']['destination_iata'], 'BBB')
+
     def test_aircraft_metadata_is_stable_without_database(self):
         with patch('app.DATABASE_PATH', self.database_path.with_name('missing.sqlite3')):
             body = self.client.get('/api/flightplan/aircraft?weekday=2&time=00:30').get_json()
