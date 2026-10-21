@@ -1,10 +1,14 @@
 import math
 import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from threading import Thread
 
 from flask import Flask, jsonify, render_template, request
+
+from jobs.refresh_flightplans import acquire_run, execute_refresh, fail_run
+from jobs.scrape_flightplan import scrape_enterprises
 
 
 ROUTE_SEGMENT_DEGREES = 2
@@ -93,7 +97,7 @@ def route_bearing(start, end):
     return (math.degrees(math.atan2(x, y)) + 360) % 360
 
 app = Flask(__name__)
-DATABASE_PATH = Path(__file__).resolve().parent / 'data' / 'airlinesim.sqlite3'
+DATABASE_PATH = Path(__file__).resolve().parent / 'data' / 'hindenburg_v5.sqlite3'
 
 
 def empty_feature_collection():
@@ -232,7 +236,7 @@ def load_flights(connection, filters, require_coordinates=False):
         return []
     if require_coordinates and not {'latitude', 'longitude'} <= airport_columns:
         return []
-    names = ['enterprise_name', 'flight_number', 'frequency', 'departure_time',
+    names = ['enterprise_name', 'flight_number', 'frequency', 'validity', 'scraped_at', 'departure_time',
              'arrival_time', 'aircraft_type', 'remarks', 'origin_iata', 'origin_name',
              'destination_iata', 'destination_name']
     select_optional = ', '.join(optional_expression(columns, name) for name in names)
@@ -360,6 +364,21 @@ def flightplan_airlines():
     connection = connect_database()
     try:
         columns = table_columns(connection, 'flightplan_flights')
+        airline_columns = table_columns(connection, 'airlines')
+        if {'enterprise_id', 'enterprise_name', 'is_active'} <= airline_columns:
+            flight_count = (
+                '(SELECT COUNT(*) FROM flightplan_flights f '
+                'WHERE f.enterprise_id = a.enterprise_id)'
+                if 'enterprise_id' in columns else '0'
+            )
+            rows = connection.execute(
+                f"""
+                SELECT a.enterprise_id, a.enterprise_name, {flight_count} AS flight_count
+                FROM airlines a WHERE a.is_active = 1
+                ORDER BY a.enterprise_name COLLATE NOCASE, a.enterprise_id
+                """
+            ).fetchall()
+            return jsonify([dict(row) for row in rows])
         if 'enterprise_id' not in columns:
             return jsonify([])
         enterprise_name = (
@@ -382,6 +401,79 @@ def flightplan_airlines():
         connection.close()
 
     return jsonify([dict(row) for row in rows])
+
+
+def update_airline_flightplan(db_path, run_id, enterprise):
+    try:
+        execute_refresh(
+            db_path, run_id, scraper=scrape_enterprises,
+            enterprises=[enterprise], timeout=20, request_delay=0,
+        )
+    except Exception:
+        app.logger.exception("Airline-Flugplan-Update %s fehlgeschlagen", run_id)
+
+
+@app.post('/api/flightplan/airlines/<int:enterprise_id>/refresh')
+def start_airline_update(enterprise_id):
+    if request.headers.get('X-Requested-With') != 'XMLHttpRequest':
+        return jsonify({'error': 'Update muss über die Anwendung angefordert werden.'}), 403
+    if enterprise_id <= 0 or enterprise_id > 9223372036854775807:
+        return jsonify({'error': 'Ungültige Airline-ID.'}), 400
+    if not DATABASE_PATH.exists():
+        return jsonify({'error': 'Flugplan-Datenbank ist nicht verfügbar.'}), 503
+    connection = connect_database()
+    try:
+        if not {'enterprise_id', 'enterprise_name', 'is_active'} <= table_columns(connection, 'airlines'):
+            return jsonify({'error': 'Airline-Verzeichnis ist nicht verfügbar.'}), 503
+        row = connection.execute(
+            'SELECT enterprise_id, enterprise_name FROM airlines '
+            'WHERE enterprise_id = ? AND is_active = 1', (enterprise_id,),
+        ).fetchone()
+        if row is None:
+            return jsonify({'error': 'Airline wurde nicht gefunden oder ist inaktiv.'}), 404
+        enterprise = dict(row)
+    finally:
+        connection.close()
+    db_path = DATABASE_PATH
+    try:
+        run_id = acquire_run(db_path, stale_after_seconds=7200)
+    except sqlite3.Error:
+        app.logger.exception("Flugplan-Update konnte nicht reserviert werden")
+        return jsonify({'error': 'Update konnte nicht gestartet werden. Bitte erneut versuchen.'}), 503
+    if run_id is None:
+        return jsonify({'error': 'Es läuft bereits ein Flugplan-Update. Bitte später erneut versuchen.'}), 409
+    try:
+        Thread(
+            target=update_airline_flightplan,
+            args=(db_path, run_id, enterprise),
+            daemon=True,
+        ).start()
+    except Exception as error:
+        fail_run(db_path, run_id, error)
+        app.logger.exception("Hintergrund-Update konnte nicht gestartet werden")
+        return jsonify({'error': 'Hintergrund-Update konnte nicht gestartet werden.'}), 503
+    return jsonify({'run_id': run_id, 'enterprise_id': enterprise_id}), 202
+
+
+@app.get('/api/flightplan/refresh/<int:run_id>')
+def airline_update_status(run_id):
+    if run_id <= 0 or run_id > 9223372036854775807 or not DATABASE_PATH.exists():
+        return jsonify({'error': 'Update wurde nicht gefunden.'}), 404
+    connection = connect_database()
+    try:
+        if not table_columns(connection, 'import_runs'):
+            return jsonify({'error': 'Update wurde nicht gefunden.'}), 404
+        row = connection.execute(
+            "SELECT id, status, started_at, completed_at, flights_imported, error_summary "
+            "FROM import_runs WHERE id = ? AND import_type = 'flightplans'", (run_id,),
+        ).fetchone()
+        if row is None:
+            return jsonify({'error': 'Update wurde nicht gefunden.'}), 404
+        response = jsonify({'run': dict(row)})
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    finally:
+        connection.close()
 
 
 @app.route('/api/flightplan/routes')
@@ -468,7 +560,55 @@ def parse_utc_offset(value):
     return timezone(offset if match.group(1) == '+' else -offset)
 
 
+def flight_valid_on(row, departure_date):
+    validity = (row.get('validity') or '').strip()
+    if not validity:
+        return True
+    date_pattern = r'(\d{1,2})\s*([A-Za-z]{3})(?:\s*(\d{4}))?'
+    pattern = rf'(?:(?:from|ab)\s+{date_pattern})?(?:\s*(?:until|to|bis)\s+{date_pattern})?'
+    match = re.fullmatch(pattern, validity, re.IGNORECASE)
+    if match is None:
+        raise ValueError(f'Unbekannte Flugplan-Gültigkeit: {validity}')
+    months = {name: index for index, name in enumerate(
+        ('jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'), 1
+    )}
+    reference = (
+        datetime.fromisoformat(row['scraped_at']).date()
+        if row.get('scraped_at') else departure_date
+    )
+
+    def parse_bound(day, month, year):
+        if day is None:
+            return None
+        month_number = months.get(month.lower())
+        if month_number is None:
+            raise ValueError(f'Unbekannter Monat in Flugplan-Gültigkeit: {validity}')
+        if year:
+            return date(int(year), month_number, int(day))
+        candidates = []
+        for candidate_year in range(reference.year - 1, reference.year + 2):
+            try:
+                candidates.append(date(candidate_year, month_number, int(day)))
+            except ValueError:
+                continue
+        if not candidates:
+            raise ValueError(f'Ungültiges Datum in Flugplan-Gültigkeit: {validity}')
+        return min(candidates, key=lambda candidate: abs((candidate - reference).days))
+
+    start = parse_bound(*match.groups()[:3])
+    end = parse_bound(*match.groups()[3:])
+    if start and end and end < start and match.group(6) is None:
+        end = date(start.year, end.month, end.day)
+        if end < start:
+            end = date(start.year + 1, end.month, end.day)
+    if start and end and end < start:
+        raise ValueError(f'Ungültiger Zeitraum in Flugplan-Gültigkeit: {validity}')
+    return (start is None or departure_date >= start) and (end is None or departure_date <= end)
+
+
 def flight_occurrence(row, departure_date):
+    if not flight_valid_on(row, departure_date):
+        return None
     departure_minute = parse_time_to_minutes(row.get('departure_time'))
     arrival_minute = parse_time_to_minutes(row.get('arrival_time'))
     if departure_minute is None or arrival_minute is None:
@@ -481,6 +621,9 @@ def flight_occurrence(row, departure_date):
         tzinfo=parse_utc_offset(row.get('destination_timezone'))
     )
     arrival = arrival_local.astimezone(timezone.utc)
+    while arrival - departure > timedelta(days=1):
+        arrival_local -= timedelta(days=1)
+        arrival = arrival_local.astimezone(timezone.utc)
     while arrival <= departure:
         arrival_local += timedelta(days=1)
         arrival = arrival_local.astimezone(timezone.utc)
@@ -506,7 +649,7 @@ def active_flight_occurrence(row, instant):
         if departure_date.isoweekday() not in flight_days:
             continue
         occurrence = flight_occurrence(row, departure_date)
-        if occurrence and occurrence[0] <= instant <= occurrence[1]:
+        if occurrence and occurrence[0] <= instant < occurrence[1]:
             return occurrence
     return None
 
@@ -537,6 +680,7 @@ def flightplan_aircraft():
     result = empty_feature_collection()
     result['metadata'] = filter_metadata(filters, [])
     result['metadata']['aircraft_count'] = 0
+    result['metadata']['count_basis'] = 'scheduled_flights'
     now = datetime.now(timezone.utc)
     result['metadata']['instant'] = filters['time'] or now.strftime('%H:%M')
     if not DATABASE_PATH.exists():
@@ -552,7 +696,11 @@ def flightplan_aircraft():
     aircraft_features = []
     active_rows = []
     for row in rows:
-        occurrence = active_flight_occurrence(row, instant)
+        try:
+            occurrence = active_flight_occurrence(row, instant)
+        except ValueError as error:
+            app.logger.error("Flugplan %s kann nicht ausgewertet werden: %s", row.get('flight_number'), error)
+            return jsonify({'error': str(error)}), 503
         if occurrence is None:
             continue
         departure_at, arrival_at = occurrence
@@ -601,7 +749,7 @@ def flightplan_aircraft():
         )
 
     result['features'] = aircraft_features
-    result['metadata'] = filter_metadata(filters, active_rows)
+    result['metadata'].update(filter_metadata(filters, active_rows))
     result['metadata']['aircraft_count'] = len(aircraft_features)
     result['metadata']['instant'] = filters['time'] or now.strftime('%H:%M')
     return jsonify(result)
@@ -768,8 +916,12 @@ def analysis_airport_flightplan(airport_id):
             item[f'next_{event}_at'] = instant.isoformat()
             result.append(item)
         return result
-    departing = next_rows(all_departing, 'departure')
-    arriving = next_rows(all_arriving, 'arrival')
+    try:
+        departing = next_rows(all_departing, 'departure')
+        arriving = next_rows(all_arriving, 'arrival')
+    except ValueError as error:
+        app.logger.error("Flugplan für Flughafen %s kann nicht ausgewertet werden: %s", airport_id, error)
+        return jsonify({'error': str(error)}), 503
     return jsonify({'airport': airport, 'departing': departing,
                     'arriving': arriving,
                     'airlines': airline_summary(airport_rows), 'destinations': destinations,

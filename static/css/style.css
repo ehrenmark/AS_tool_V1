@@ -29,6 +29,7 @@ h2 { margin-bottom: 10px; font-size: 1.12rem; }
 h3 { margin: 15px 0 8px; font-size: .9rem; }
 .data-state { margin: 8px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.35; }
 .data-state.error { color: #b91c1c; }
+.data-state.success { color: #15803d; }
 .data-state.empty { color: #92400e; }
 .drawer-close { border: 0; border-radius: 10px; background: #eef2ff; color: #4338ca; cursor: pointer; font-size: 1.3rem; font-weight: 700; }
 .section-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
@@ -39,6 +40,8 @@ h3 { margin: 15px 0 8px; font-size: .9rem; }
 .field select option { font-weight: 400; }
 .field select option.all-airlines-option, .field select.all-airlines-selected { font-weight: 800; }
 .link-button { border: 0; padding: 0; color: #2563eb; background: transparent; font-size: .78rem; font-weight: 750; cursor: pointer; }
+.action-button { width: 100%; margin-top: 12px; padding: 9px 12px; border: 0; border-radius: 10px; color: #fff; background: #6d28d9; font-size: .8rem; font-weight: 750; cursor: pointer; }
+.action-button:disabled { color: #64748b; background: #e2e8f0; cursor: not-allowed; }
 .comparison-legend, .legend { display: flex; flex-wrap: wrap; gap: 8px 13px; margin-top: 12px; color: #475569; font-size: .76rem; font-weight: 700; }
 .comparison-legend span, .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend-line { display: inline-block; width: 22px; height: 4px; border-radius: 4px; }

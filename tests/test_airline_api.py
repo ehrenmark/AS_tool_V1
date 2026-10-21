@@ -64,6 +64,27 @@ class AirlineApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item['enterprise_name'] for item in response.get_json()], ['Alpha Air', 'Zulu Air'])
 
+    def test_catalog_includes_empty_airlines_and_excludes_inactive_airlines(self):
+        connection = sqlite3.connect(self.database_path)
+        connection.executescript("""
+            CREATE TABLE airlines (
+                enterprise_id INTEGER PRIMARY KEY,
+                enterprise_name TEXT NOT NULL,
+                is_active INTEGER NOT NULL
+            );
+            INSERT INTO airlines VALUES
+                (1, 'Alpha renamed', 1), (2, 'Closed Zulu', 0), (3, 'Empty Air', 1);
+        """)
+        connection.close()
+
+        response = self.client.get('/api/flightplan/airlines')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), [
+            {'enterprise_id': 1, 'enterprise_name': 'Alpha renamed', 'flight_count': 1},
+            {'enterprise_id': 3, 'enterprise_name': 'Empty Air', 'flight_count': 0},
+        ])
+
     def test_routes_can_be_filtered_by_enterprise(self):
         response = self.client.get('/api/flightplan/routes?enterprise_id=1')
 

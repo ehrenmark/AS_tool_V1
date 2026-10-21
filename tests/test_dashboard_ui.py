@@ -8,6 +8,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DashboardUiTests(unittest.TestCase):
+    def test_airline_refresh_button_behavior(self):
+        template = (ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+        self.assertIn('id="updateAirlineButton"', template)
+        self.assertIn('id="airlineUpdateState"', template)
+        result = subprocess.run(
+            ['node', str(ROOT / 'tests' / 'airline_refresh_ui.cjs')],
+            cwd=ROOT, check=True, capture_output=True, text=True, encoding='utf-8',
+        )
+        self.assertIn('airline refresh UI: OK', result.stdout)
+
     def run_filter_helpers(self, expression):
         script = (
             "const h=require('./static/js/demand-filters.js');"

@@ -82,6 +82,43 @@ class AnalysisApiTests(unittest.TestCase):
         self.assertEqual(body['metadata']['instant'], '00:30')
         self.assertAlmostEqual(body['features'][0]['properties']['progress'], .75)
 
+    def test_aircraft_excludes_future_flightplan_validity(self):
+        connection = sqlite3.connect(self.database_path)
+        connection.executescript("""
+            ALTER TABLE flightplan_flights ADD COLUMN validity TEXT;
+            ALTER TABLE flightplan_flights ADD COLUMN scraped_at TEXT;
+            UPDATE flightplan_flights SET validity='from 23Oct',
+                scraped_at='2026-10-21 10:00:00', frequency='1234567'
+            WHERE flight_number='O2';
+        """)
+        connection.close()
+
+        class Wednesday(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 10, 21, 11, tzinfo=timezone.utc)
+
+        with patch('app.datetime', Wednesday):
+            response = self.client.get('/api/flightplan/aircraft?enterprise_id=1')
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body['features'], [])
+        self.assertEqual(body['metadata']['aircraft_count'], 0)
+        self.assertEqual(body['metadata']['count_basis'], 'scheduled_flights')
+
+    def test_aircraft_reports_unrecognized_validity_instead_of_wrong_count(self):
+        connection = sqlite3.connect(self.database_path)
+        connection.executescript("""
+            ALTER TABLE flightplan_flights ADD COLUMN validity TEXT;
+            UPDATE flightplan_flights SET validity='unknown';
+        """)
+        connection.close()
+        with patch('app.app.logger.error') as log:
+            response = self.client.get('/api/flightplan/aircraft?enterprise_id=1&weekday=2&time=11:00')
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('Gültigkeit', response.get_json()['error'])
+        log.assert_called_once()
+
     def test_aircraft_fixed_time_without_weekday_uses_current_utc_day(self):
         class Tuesday(datetime):
             @classmethod

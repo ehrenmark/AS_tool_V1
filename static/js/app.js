@@ -16,6 +16,7 @@ const elements = {
     destinationState: $('destinationState'), aircraftState: $('aircraftState'), routeState: $('routeState'), kpiState: $('kpiState'),
     routeToggle: $('routeToggle'), aircraftToggle: $('aircraftToggle'), airlineSelect: $('airlineSelect'),
     comparisonSelect: $('comparisonSelect'), comparisonLegend: $('comparisonLegend'),
+    updateAirlineButton: $('updateAirlineButton'), airlineUpdateState: $('airlineUpdateState'),
     kpiGrid: $('kpiGrid'), longestRoutes: $('longestRoutes'),
     drawer: $('airportDrawer'), drawerClose: $('drawerClose'),
     drawerTitle: $('drawerTitle'), drawerContent: $('drawerContent'), drawerState: $('drawerState')
@@ -32,6 +33,7 @@ let mapReady = false;
 let selectedAirportId = '';
 let selectedAirportProperties = {};
 let aircraftFrameTime = 0;
+let airlineUpdateInProgress = false;
 
 const initialParams = new URLSearchParams(location.search);
 const initialCamera = {
@@ -184,11 +186,19 @@ function aircraftBearing(start, end) {
     return (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;
 }
 
+function updateAircraftState() {
+    const count = aircraftData.features.length;
+    setState(elements.aircraftState, count
+        ? `${numberText(count)} ${count === 1 ? 'Flug' : 'Flüge'} laut Flugplan unterwegs`
+        : 'Keine Flüge laut Flugplan unterwegs.', count ? '' : 'empty');
+}
+
 function animateAircraftFrame(timestamp) {
     requestAnimationFrame(animateAircraftFrame);
     if (document.hidden || timestamp - aircraftFrameTime < AIRCRAFT_FRAME_INTERVAL || !aircraftData.features.length) return;
     aircraftFrameTime = timestamp;
     const now = Date.now();
+    const previousCount = aircraftData.features.length;
     aircraftData.features = aircraftData.features.filter((feature) => {
         const properties = feature.properties || {};
         const departure = Date.parse(properties.departure_at);
@@ -198,7 +208,7 @@ function animateAircraftFrame(timestamp) {
         if (!Number.isFinite(departure) || !Number.isFinite(arrival) || arrival <= departure
             || !Array.isArray(origin) || !Array.isArray(destination)) return true;
         const progress = (now - departure) / (arrival - departure);
-        if (progress < 0 || progress > 1) return false;
+        if (progress < 0 || progress >= 1) return false;
         const position = interpolateAircraftPosition(origin, destination, progress);
         const nextPosition = interpolateAircraftPosition(origin, destination, Math.min(1, progress + 0.0001));
         feature.geometry.coordinates = position;
@@ -207,6 +217,7 @@ function animateAircraftFrame(timestamp) {
         return true;
     });
     updateSource('flightplan-aircraft', aircraftData);
+    if (aircraftData.features.length !== previousCount) updateAircraftState();
 }
 
 async function syncAircraft() {
@@ -220,7 +231,7 @@ async function syncAircraft() {
         if (selection !== `${elements.airlineSelect.value}|${elements.comparisonSelect.value}`) return;
         aircraftData = normalizeGeoJson(data);
         updateSource('flightplan-aircraft', aircraftData);
-        setState(elements.aircraftState, aircraftData.features.length ? `${numberText(aircraftData.features.length)} Flugzeuge aktiv` : 'Keine aktiven Flugzeuge.', aircraftData.features.length ? '' : 'empty');
+        updateAircraftState();
     } catch (error) {
         if (error.name !== 'AbortError') console.error(error);
     }
@@ -234,7 +245,7 @@ function popupNode(properties, type) {
     } else if (type === 'aircraft') {
         appendTextElement(root, 'p', properties.flight_number || 'Flug', 'popup-title');
         appendTextElement(root, 'p', `${text(properties.origin_iata)} → ${text(properties.destination_iata)}`, 'popup-detail');
-        appendTextElement(root, 'p', `${text(properties.departure_time)}–${text(properties.arrival_time)} · ${text(properties.aircraft_type)}`, 'popup-detail');
+        appendTextElement(root, 'p', `${scheduledTime(properties.departure_at)}–${scheduledTime(properties.arrival_at)} · ${text(properties.aircraft_type)}`, 'popup-detail');
     } else {
         appendTextElement(root, 'p', `${text(properties.iata_code || properties.destination_iata, '---')} · ${text(properties.name || properties.destination_name || properties.icao_code)}`, 'popup-title');
         appendTextElement(root, 'p', `Flüge: ${numberText(properties.flight_count || 0)}`, 'popup-detail');
@@ -363,6 +374,7 @@ async function loadDashboard() {
     loadDashboard.controller?.abort(); loadDashboard.controller = controller;
     const query = apiParams().toString();
     elements.airlineSelect.disabled = true; elements.comparisonSelect.disabled = true;
+    syncAirlineUpdateControl();
     setState(elements.routeState, 'Flugplan wird geladen …');
     setState(elements.destinationState, 'Ziele werden geladen …');
     setState(elements.aircraftState, 'Flugzeuge werden geladen …');
@@ -397,7 +409,7 @@ async function loadDashboard() {
         }
         else {
             aircraftData = normalizeGeoJson(aircraftResult.data); updateSource('flightplan-aircraft', aircraftData);
-            setState(elements.aircraftState, aircraftData.features.length ? `${numberText(aircraftData.features.length)} Flugzeuge aktiv` : 'Keine aktiven Flugzeuge.', aircraftData.features.length ? '' : 'empty');
+            updateAircraftState();
         }
         if (kpisResult.error) { clearKpis(); setState(elements.kpiState, 'Kennzahlen konnten nicht geladen werden.', 'error'); }
         else renderKpis(kpisResult.data, routesResult.error ? EMPTY_GEOJSON() : routeData);
@@ -407,7 +419,7 @@ async function loadDashboard() {
         if (error.name !== 'AbortError') console.error(error);
     } finally {
         if (requestId === dataRequestId) {
-            elements.airlineSelect.disabled = elements.airlineSelect.options.length <= 1;
+            elements.airlineSelect.disabled = airlineUpdateInProgress || elements.airlineSelect.options.length <= 1;
             syncComparisonOptions();
         }
     }
@@ -463,9 +475,9 @@ function renderKpis(response, routes) {
     setState(elements.kpiState, hasData ? 'Kennzahlen für die aktuelle Auswahl' : 'Keine Kennzahlen für diese Auswahl.', hasData ? '' : 'empty');
 }
 
-function populateAirlines(airlines) {
-    const primaryFromUrl = initialParams.get('airlines')?.split(',')[0] || '';
-    const comparisonFromUrl = initialParams.get('airlines')?.split(',')[1] || '';
+function populateAirlines(airlines, preserveSelection = false) {
+    const primaryFromUrl = preserveSelection ? elements.airlineSelect.value : initialParams.get('airlines')?.split(',')[0] || '';
+    const comparisonFromUrl = preserveSelection ? elements.comparisonSelect.value : initialParams.get('airlines')?.split(',')[1] || '';
     elements.airlineSelect.replaceChildren(new Option('Airline auswählen', ''));
     const allAirlines = new Option('Alle Airlines', ALL_AIRLINES);
     allAirlines.className = 'all-airlines-option';
@@ -478,7 +490,7 @@ function populateAirlines(airlines) {
     });
     if ([...elements.airlineSelect.options].some((option) => option.value === primaryFromUrl)) elements.airlineSelect.value = primaryFromUrl;
     if ([...elements.comparisonSelect.options].some((option) => option.value === comparisonFromUrl)) elements.comparisonSelect.value = comparisonFromUrl;
-    elements.airlineSelect.disabled = false; elements.comparisonSelect.disabled = false; syncComparisonOptions();
+    elements.airlineSelect.disabled = airlineUpdateInProgress; elements.comparisonSelect.disabled = false; syncComparisonOptions();
 }
 
 function syncComparisonOptions() {
@@ -486,8 +498,77 @@ function syncComparisonOptions() {
     elements.airlineSelect.classList.toggle('all-airlines-selected', elements.airlineSelect.value === ALL_AIRLINES);
     [...elements.comparisonSelect.options].forEach((option) => { option.disabled = !canCompare || Boolean(option.value && option.value === elements.airlineSelect.value); });
     if (!canCompare || (elements.comparisonSelect.value && elements.comparisonSelect.value === elements.airlineSelect.value)) elements.comparisonSelect.value = '';
-    elements.comparisonSelect.disabled = !canCompare;
+    elements.comparisonSelect.disabled = airlineUpdateInProgress || !canCompare;
     elements.comparisonLegend.hidden = !elements.comparisonSelect.value;
+    syncAirlineUpdateControl();
+}
+
+function syncAirlineUpdateControl() {
+    const singleAirline = Boolean(elements.airlineSelect.value && elements.airlineSelect.value !== ALL_AIRLINES);
+    elements.updateAirlineButton.disabled = airlineUpdateInProgress || elements.airlineSelect.disabled || !singleAirline;
+    elements.updateAirlineButton.textContent = airlineUpdateInProgress ? 'Update läuft …' : 'Airline aktualisieren';
+    elements.updateAirlineButton.setAttribute('aria-busy', String(airlineUpdateInProgress));
+    if (!singleAirline && !airlineUpdateInProgress) {
+        setState(elements.airlineUpdateState, 'Eine einzelne primäre Airline auswählen, um ihren Flugplan zu aktualisieren.');
+    } else if (!airlineUpdateInProgress && (!elements.airlineUpdateState.textContent
+        || elements.airlineUpdateState.textContent === 'Eine einzelne primäre Airline auswählen, um ihren Flugplan zu aktualisieren.')) {
+        setState(elements.airlineUpdateState, 'Aktualisiert ausschließlich den Flugplan der primären Airline.');
+    }
+}
+
+async function waitForAirlineUpdate(runId) {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+        const response = await fetchJson(`/api/flightplan/refresh/${runId}`, 'Update-Status');
+        const run = response.run;
+        if (!run || !['running', 'success', 'partial', 'failure'].includes(run.status)) {
+            throw new Error('Ungültige Antwort auf die Update-Statusabfrage.');
+        }
+        if (run.status !== 'running') return run;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    throw new Error('Zeitlimit bei der Update-Statusabfrage erreicht.');
+}
+
+async function updateSelectedAirline() {
+    const enterpriseId = elements.airlineSelect.value;
+    if (airlineUpdateInProgress || elements.airlineSelect.disabled || !enterpriseId || enterpriseId === ALL_AIRLINES) return;
+    let updateStarted = false;
+    let updateFinished = false;
+    let updateSucceeded = false;
+    airlineUpdateInProgress = true;
+    elements.airlineSelect.disabled = true;
+    syncComparisonOptions();
+    setState(elements.airlineUpdateState, 'Aktueller Flugplan wird vom AirlineSim-Server abgerufen …');
+    try {
+        const response = await fetch(`/api/flightplan/airlines/${encodeURIComponent(enterpriseId)}/refresh`, {
+            method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Update konnte nicht gestartet werden: HTTP ${response.status}`);
+        updateStarted = true;
+        if (!Number.isSafeInteger(result.run_id) || result.run_id <= 0) {
+            throw new Error('Ungültige Update-ID vom Server.');
+        }
+        const run = await waitForAirlineUpdate(result.run_id);
+        updateFinished = true;
+        if (run.status !== 'success') throw new Error(run.error_summary || 'Flugplan-Update fehlgeschlagen. Der bisherige Stand bleibt erhalten.');
+        updateSucceeded = true;
+        const airlines = await fetchJson('/api/flightplan/airlines', 'Airlines');
+        if (!Array.isArray(airlines)) throw new Error('Ungültiges Airline-Verzeichnis vom Server.');
+        populateAirlines(airlines, true);
+        syncAircraft.controller?.abort();
+        await loadDashboard();
+        setState(elements.airlineUpdateState, `Flugplan aktualisiert: ${numberText(run.flights_imported)} Einträge übernommen.`, 'success');
+    } catch (error) {
+        const message = updateSucceeded
+            ? `Update erfolgreich, aber die Anzeige konnte nicht vollständig neu geladen werden: ${error.message}`
+            : `${error.message}${updateStarted && !updateFinished ? ' Der Lauf kann im Hintergrund weiterlaufen.' : ''}`;
+        setState(elements.airlineUpdateState, message, 'error');
+    } finally {
+        airlineUpdateInProgress = false;
+        elements.airlineSelect.disabled = elements.airlineSelect.options.length <= 1;
+        syncComparisonOptions();
+    }
 }
 
 function detailRows(data, properties) {
@@ -634,8 +715,9 @@ elements.togglePassenger.addEventListener('click', () => toggleGroup('passenger'
 elements.toggleCargo.addEventListener('click', () => toggleGroup('cargo'));
 elements.routeToggle.addEventListener('change', () => { updateVisibility(); schedulePermalink(); });
 elements.aircraftToggle.addEventListener('change', () => { updateVisibility(); if (elements.aircraftToggle.checked) syncAircraft(); schedulePermalink(); });
-elements.airlineSelect.addEventListener('change', () => { syncComparisonOptions(); loadDashboard(); schedulePermalink(); });
+elements.airlineSelect.addEventListener('change', () => { setState(elements.airlineUpdateState, ''); syncComparisonOptions(); loadDashboard(); schedulePermalink(); });
 elements.comparisonSelect.addEventListener('change', () => { syncComparisonOptions(); loadDashboard(); schedulePermalink(); });
+elements.updateAirlineButton.addEventListener('click', updateSelectedAirline);
 elements.drawerClose.addEventListener('click', closeDrawer);
 map.on('moveend', () => { if (mapReady) schedulePermalink(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) syncAircraft(); });

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "airlinesim.sqlite3"
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "hindenburg_v5.sqlite3"
 DEFAULT_AIRPORTS_CSV_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 
 COORDINATE_COLUMNS_SQL = {

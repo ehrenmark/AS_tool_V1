@@ -32,6 +32,10 @@
                 </label>
             </div>
 
+            <button class="action-button" id="updateAirlineButton" type="button" disabled
+                    aria-describedby="airlineUpdateState">Airline aktualisieren</button>
+            <p class="data-state" id="airlineUpdateState" role="status" aria-live="polite">Eine einzelne primäre Airline auswählen, um ihren Flugplan zu aktualisieren.</p>
+
             <div class="comparison-legend" id="comparisonLegend" hidden>
                 <span><i class="legend-line primary-line"></i>Nur primär</span>
                 <span><i class="legend-line comparison-line"></i>Nur Vergleich</span>
@@ -73,7 +77,7 @@
             </div>
             <p class="data-state" id="airportCount" role="status">Flughäfen werden geladen …</p>
             <p class="data-state" id="destinationState" role="status">Airline auswählen, um Ziele anzuzeigen.</p>
-            <p class="data-state" id="aircraftState" role="status">Airline auswählen, um Flugzeuge anzuzeigen.</p>
+            <p class="data-state" id="aircraftState" role="status" title="Schätzung anhand des gespeicherten Flugplans und verfügbarer Koordinaten; keine Live-Positionen oder Flottengröße.">Airline auswählen, um Flugzeuge anzuzeigen.</p>
         </section>
     </main>
 

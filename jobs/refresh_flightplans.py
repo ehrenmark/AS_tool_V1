@@ -13,6 +13,7 @@ try:
         DEFAULT_USER_AGENT,
         ScrapeResult,
         scrape_all_enterprises,
+        scrape_enterprises,
     )
 except ModuleNotFoundError:
     from scrape_flightplan import (
@@ -21,6 +22,7 @@ except ModuleNotFoundError:
         DEFAULT_USER_AGENT,
         ScrapeResult,
         scrape_all_enterprises,
+        scrape_enterprises,
     )
 
 CREATE_IMPORT_RUNS_SQL = """
@@ -190,6 +192,16 @@ def run_refresh(
     run_id = acquire_run(db_path, stale_after_seconds)
     if run_id is None:
         return None
+    return execute_refresh(db_path, run_id, scraper=scraper, **scraper_options)
+
+
+def execute_refresh(
+    db_path: Path,
+    run_id: int,
+    *,
+    scraper: Callable[..., ScrapeResult] = scrape_all_enterprises,
+    **scraper_options: object,
+) -> ScrapeResult:
     try:
         result = scraper(
             db_path,
@@ -207,8 +219,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Refresh all flightplans safely in SQLite.")
     parser.add_argument("--db-path", default=os.getenv("AS_DB_PATH", str(DEFAULT_DB_PATH)))
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument(
+        "--enterprise-id", type=int, action="append",
+        help="Nur diese Airline aktualisieren; für mehrere Airlines wiederholbar",
+    )
     parser.add_argument("--timeout", type=int, default=60)
-    parser.add_argument("--request-delay", type=float, default=0.25)
+    parser.add_argument("--request-delay", type=float, default=0.75)
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     parser.add_argument(
         "--interval",
@@ -221,7 +237,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=int(os.getenv("AS_FLIGHTPLAN_REFRESH_STALE_AFTER", "7200")),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.enterprise_id and any(enterprise_id <= 0 for enterprise_id in args.enterprise_id):
+        parser.error("--enterprise-id muss positiv sein")
+    if args.request_delay < 0:
+        parser.error("--request-delay darf nicht negativ sein")
+    return args
 
 
 def main() -> None:
@@ -230,6 +251,14 @@ def main() -> None:
     while True:
         started = time.monotonic()
         try:
+            options = {}
+            scraper = scrape_all_enterprises
+            if args.enterprise_id:
+                scraper = scrape_enterprises
+                options["enterprises"] = [
+                    {"enterprise_id": enterprise_id, "enterprise_name": None}
+                    for enterprise_id in dict.fromkeys(args.enterprise_id)
+                ]
             result = run_refresh(
                 db_path,
                 stale_after_seconds=args.stale_after,
@@ -237,10 +266,14 @@ def main() -> None:
                 timeout=args.timeout,
                 request_delay=args.request_delay,
                 user_agent=args.user_agent,
+                scraper=scraper,
+                **options,
             )
             if result is None:
                 print("Refresh skipped: another flightplan refresh is running.")
             else:
+                if result.failures:
+                    raise RuntimeError("Fehler bei einzelnen Airlines:\n- " + "\n- ".join(result.failures))
                 print(
                     f"Refresh complete: {result.enterprises_succeeded}/"
                     f"{result.enterprises_total} enterprises, {result.flights_imported} flights."

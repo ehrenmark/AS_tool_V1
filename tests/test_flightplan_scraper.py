@@ -81,7 +81,8 @@ class FlightplanScraperTests(unittest.TestCase):
         flights = parse_flightplan(
             12,
             'https://example.test/app/info/enterprises/12?tab=3',
-            '<html><title>Alpha Air | AirlineSim</title><h2>Flight schedule</h2></html>',
+            '<html><title>Alpha Air | AirlineSim</title><h2>Alpha Air</h2>'
+            '<h3>Flight schedule</h3><p>No data available.</p></html>',
         )
 
         self.assertEqual(flights, [])
@@ -117,7 +118,7 @@ class FlightplanScraperTests(unittest.TestCase):
         connection.execute('INSERT INTO flightplan_flights VALUES (12, "OLD")')
         connection.commit()
 
-        with self.assertRaises(sqlite3.OperationalError):
+        with self.assertRaises(ValueError):
             store_flightplan(
                 connection,
                 12,
