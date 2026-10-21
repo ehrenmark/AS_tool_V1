@@ -1,5 +1,16 @@
 # AirlineSim-Datenbanken
 
+## Tool-Auswahl
+
+Die Startseite `/` bietet Kacheln fuer die verfuegbaren und geplanten Tools.
+Die bestehende Flugplan-Karte ist unter `/map` erreichbar; Karten-Links mit
+Auswahlparametern verwenden beispielsweise `/map?airlines=80`.
+`/flugplaene` ist vorerst eine als **In Planung** gekennzeichnete Platzhalterseite.
+Die automatische Flugplan-Erstellung ist dort noch nicht implementiert.
+Beide Tool-Seiten verlinken zurueck zur Startseite.
+
+## Datenbanken
+
 - `airlinesim.sqlite3`: bisherige Datenbank fuer Hindenburg V4, unveraendert.
   Sie bleibt als Archiv erhalten und wird nicht mehr standardmaessig verwendet.
 - `hindenburg_v5.sqlite3`: aktive Standarddatenbank der Anwendung und der Jobs

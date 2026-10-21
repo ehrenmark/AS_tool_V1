@@ -11,7 +11,7 @@
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
 button, input, select { font: inherit; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(37, 99, 235, .28); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid rgba(37, 99, 235, .28); outline-offset: 2px; }
 #map { position: fixed; inset: 0; }
 
 .dashboard {
@@ -77,6 +77,23 @@ h3 { margin: 15px 0 8px; font-size: .9rem; }
 .flight-item strong, .flight-item span { display: block; }.flight-item span { margin-top: 2px; color: var(--muted); }
 .mapboxgl-popup-content { border-radius: 11px; padding: 11px; color: var(--ink); box-shadow: 0 12px 28px rgba(15,23,42,.25); }
 .popup-title { margin: 0 0 4px; font-weight: 800; }.popup-detail { margin: 2px 0; color: #475569; font-size: .78rem; }
+
+.tool-page { min-height: 100%; height: auto; background: linear-gradient(135deg, #eef2ff, #f8fafc 55%, #e0f2fe); }
+.tool-shell { width: min(100%, 1040px); margin: 0 auto; padding: clamp(24px, 6vw, 72px) 24px; }
+.tool-intro { margin-bottom: 32px; }
+.tool-intro h1 { margin-bottom: 12px; font-size: clamp(1.8rem, 4vw, 2.6rem); }
+.tool-intro p:not(.eyebrow), .tool-card p, .tool-placeholder p { color: #475569; line-height: 1.65; }
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 24px; }
+.tool-card { display: flex; flex-direction: column; align-items: flex-start; padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; color: var(--ink); background: var(--panel); box-shadow: 0 12px 32px rgba(15,23,42,.06); text-decoration: none; }
+.tool-card:hover { border-color: #a78bfa; box-shadow: 0 12px 32px rgba(109,40,217,.12); }
+.tool-icon { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 20px; border-radius: 15px; color: #6d28d9; background: #ede9fe; }
+.tool-icon svg { width: 30px; height: 30px; }
+.tool-badge { display: inline-block; margin-bottom: 12px; padding: 4px 9px; border-radius: 6px; color: #166534; background: #dcfce7; font-size: .73rem; font-weight: 750; }
+.tool-badge.planned { color: #92400e; background: #fef3c7; }
+.tool-card h2 { margin-bottom: 8px; font-size: 1.4rem; }
+.tool-card-action { margin-top: auto; padding-top: 12px; color: #6d28d9; font-weight: 750; }
+.tool-back { display: inline-block; margin-bottom: 14px; color: #6d28d9; font-size: .85rem; font-weight: 750; text-underline-offset: 3px; }
+.tool-placeholder { padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; background: var(--panel); }
 
 @media (max-width: 760px) {
     .dashboard { top: 10px; left: 10px; width: calc(100vw - 20px); max-height: 48vh; }

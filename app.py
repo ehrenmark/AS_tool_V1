@@ -303,7 +303,17 @@ def filter_metadata(filters, rows):
 
 @app.route('/')
 def index():
+    return render_template('landing.html')
+
+
+@app.route('/map')
+def flightplan_map():
     return render_template('index.html')
+
+
+@app.route('/flugplaene')
+def flightplans():
+    return render_template('flightplans.html')
 
 
 @app.route('/api/airports')
