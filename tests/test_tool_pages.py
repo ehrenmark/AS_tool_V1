@@ -15,14 +15,22 @@ class ToolPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         return BeautifulSoup(response.data, 'html.parser')
 
-    def test_landing_page_links_to_both_tools_without_loading_map(self):
+    def test_landing_page_links_to_map_and_disables_flightplans_without_loading_map(self):
         with patch('app.connect_database') as connect:
             page = self.page('/')
         connect.assert_not_called()
         cards = page.select('.tool-card')
         self.assertEqual([card.h2.text for card in cards], ['Map', 'Flugpläne'])
-        self.assertEqual([card['href'] for card in cards], ['/map', '/flugplaene'])
-        self.assertIn('In Planung', cards[1].text)
+        self.assertEqual(cards[0]['href'], '/map')
+        self.assertEqual(cards[1].name, 'div')
+        self.assertIn('tool-card-disabled', cards[1]['class'])
+        self.assertEqual(cards[1]['aria-disabled'], 'true')
+        self.assertEqual(cards[1]['aria-labelledby'], cards[1].h2['id'])
+        self.assertFalse(cards[1].has_attr('href'))
+        self.assertFalse(cards[1].has_attr('tabindex'))
+        self.assertIsNone(cards[1].select_one('a, button, input'))
+        self.assertIsNone(page.select_one('a[href="/flugplaene"]'))
+        self.assertIn('Demnächst verfügbar', cards[1].text)
         self.assertIsNone(page.select_one('#map'))
         self.assertFalse(page.find_all('script'))
 

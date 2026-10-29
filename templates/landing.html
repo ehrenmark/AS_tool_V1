@@ -27,18 +27,18 @@
                 <p>Entdecke Flughäfen, vergleiche Airline-Netzwerke und verfolge Flüge auf der Karte.</p>
                 <span class="tool-card-action">Karte öffnen <span aria-hidden="true">&rarr;</span></span>
             </a>
-            <a class="tool-card" href="{{ url_for('flightplans') }}">
+            <div class="tool-card tool-card-disabled" role="group" aria-disabled="true" aria-labelledby="flightplans-title">
                 <span class="tool-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="3" y="5" width="18" height="16" rx="2"/>
                         <path d="M7 3v4M17 3v4M3 11h18M7 15h3M14 15h3M7 18h3"/>
                     </svg>
                 </span>
-                <span class="tool-badge planned">In Planung</span>
-                <h2>Flugpläne</h2>
+                <span class="tool-badge planned">Demnächst verfügbar</span>
+                <h2 id="flightplans-title">Flugpläne</h2>
                 <p>Der künftige Bereich für die automatische Erstellung deiner Flugpläne.</p>
-                <span class="tool-card-action">Bereich öffnen <span aria-hidden="true">&rarr;</span></span>
-            </a>
+                <span class="tool-card-action">Noch nicht verfügbar</span>
+            </div>
         </nav>
     </main>
 </body>

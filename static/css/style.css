@@ -85,7 +85,8 @@ h3 { margin: 15px 0 8px; font-size: .9rem; }
 .tool-intro p:not(.eyebrow), .tool-card p, .tool-placeholder p { color: #475569; line-height: 1.65; }
 .tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 24px; }
 .tool-card { display: flex; flex-direction: column; align-items: flex-start; padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; color: var(--ink); background: var(--panel); box-shadow: 0 12px 32px rgba(15,23,42,.06); text-decoration: none; }
-.tool-card:hover { border-color: #a78bfa; box-shadow: 0 12px 32px rgba(109,40,217,.12); }
+.tool-card:not(.tool-card-disabled):hover { border-color: #a78bfa; box-shadow: 0 12px 32px rgba(109,40,217,.12); }
+.tool-card-disabled { filter: grayscale(1); background: #f1f5f9; cursor: default; }
 .tool-icon { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 20px; border-radius: 15px; color: #6d28d9; background: #ede9fe; }
 .tool-icon svg { width: 30px; height: 30px; }
 .tool-badge { display: inline-block; margin-bottom: 12px; padding: 4px 9px; border-radius: 6px; color: #166534; background: #dcfce7; font-size: .73rem; font-weight: 750; }
