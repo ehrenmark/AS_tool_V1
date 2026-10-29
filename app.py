@@ -7,6 +7,7 @@ from threading import Thread
 
 from flask import Flask, jsonify, render_template, request
 
+from flightplan_planner import MAX_ROUTES, WEEKDAYS, generate_weekly_plan
 from jobs.refresh_flightplans import acquire_run, execute_refresh, fail_run
 from jobs.scrape_flightplan import scrape_enterprises
 
@@ -311,9 +312,28 @@ def flightplan_map():
     return render_template('index.html')
 
 
-@app.route('/flugplaene')
+@app.route('/flugplaene', methods=['GET', 'POST'])
 def flightplans():
-    return render_template('flightplans.html')
+    values = {'base': '', 'start_day': '0', 'start_time': '06:00', 'ground_minutes': '45'}
+    routes = [{'destination': '', 'outbound': '', 'inbound': '', 'frequency': '7'}]
+    plan = None
+    error = None
+    if request.method == 'POST':
+        values = {field: request.form.get(field, '') for field in values}
+        fields = ('destination', 'outbound', 'inbound', 'frequency')
+        columns = [request.form.getlist(field) for field in fields]
+        if not columns[0] or len({len(column) for column in columns}) != 1:
+            error = 'Die Streckeneingaben sind unvollständig. Bitte die Seite neu laden und erneut versuchen.'
+        elif len(columns[0]) > MAX_ROUTES:
+            error = f'Es sind höchstens {MAX_ROUTES} Strecken möglich.'
+        else:
+            routes = [dict(zip(fields, row)) for row in zip(*columns)]
+            try:
+                plan = generate_weekly_plan(**values, routes=routes)
+            except ValueError as validation_error:
+                error = str(validation_error)
+    return render_template('flightplans.html', values=values, routes=routes, plan=plan,
+                           error=error, weekdays=WEEKDAYS, max_routes=MAX_ROUTES), 400 if error else 200
 
 
 @app.route('/api/airports')

@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -64,6 +64,35 @@ def get_settings() -> dict[str, str]:
 
 def normalize_text(value: str) -> str:
     return " ".join(value.split())
+
+
+def normalize_airline_id(airline_id: str | int) -> str:
+    normalized = str(airline_id).strip()
+    if not normalized.isdecimal() or int(normalized) <= 0:
+        raise ValueError("Die Airline-ID muss eine positive ganze Zahl sein")
+    return normalized
+
+
+def gameworld_base_url(management_url: str) -> str:
+    parsed = urlsplit(management_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"Ungültige AirlineSim-URL: {management_url}")
+    return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+
+
+def select_airline(
+    session: requests.Session,
+    management_url: str,
+    airline_id: str | int,
+    timeout: int,
+) -> None:
+    """Switch the session's active enterprise before accessing a management page."""
+    response = session.get(
+        f"{gameworld_base_url(management_url)}/app/enterprise/dashboard",
+        params={"select": normalize_airline_id(airline_id)},
+        timeout=timeout,
+    )
+    response.raise_for_status()
 
 
 def select_login_form(soup: BeautifulSoup) -> Tag:

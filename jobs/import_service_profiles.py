@@ -22,6 +22,7 @@ from jobs.export_service_profiles import (
     get_settings,
     load_dotenv,
     login,
+    select_airline,
 )
 
 
@@ -30,9 +31,9 @@ CREATE_FORM_ACTION = "servicenewprofile"
 CHANGE_FORM_ACTION = "servicechange"
 
 
-def get_import_settings() -> dict[str, str]:
+def get_import_settings(gameworld: str | None = None) -> dict[str, str]:
     settings = get_settings()
-    gameworld = os.getenv("GAMEWORLDNAME_EXPORT_PROFILES")
+    gameworld = gameworld or os.getenv("GAMEWORLDNAME_EXPORT_PROFILES")
     if not gameworld:
         raise ValueError("Fehlende Einstellung in .env: GAMEWORLDNAME_EXPORT_PROFILES")
     settings["AS_TARGET_SERVICE_PROFILES_URL"] = (
@@ -126,7 +127,38 @@ def change_payload(form: Tag, values: dict[str, str], profile_name: str) -> dict
 
 
 def service_profile_map(html: str, source_url: str) -> dict[str, dict[str, Any]]:
-    return {profile["name"]: profile for profile in extract_profile_summaries(html, source_url)}
+    try:
+        profiles = extract_profile_summaries(html, source_url)
+    except ValueError as error:
+        if str(error) != "Keine Serviceprofile mit Bearbeiten- oder Info-Link gefunden":
+            raise
+        return {}
+    return {profile["name"]: profile for profile in profiles}
+
+
+def configure_profile(
+    session: requests.Session,
+    profile: dict[str, Any],
+    overview_profile: dict[str, Any],
+    timeout: int,
+) -> None:
+    name = profile["name"]
+    detail_url = next(
+        (link["url"] for link in overview_profile["detail_links"] if "bearbeiten" in link["label"] or "edit" in link["label"]),
+        None,
+    )
+    if detail_url is None:
+        raise ValueError(f"Kein Bearbeitungslink für das Profil '{name}' gefunden")
+    detail_response = session.get(detail_url, timeout=timeout)
+    detail_response.raise_for_status()
+    change_form = find_form(BeautifulSoup(detail_response.text, "html.parser"), CHANGE_FORM_ACTION)
+    submit_form(
+        session,
+        detail_response.url,
+        change_form,
+        change_payload(change_form, saved_form_values(profile), name),
+        timeout,
+    )
 
 
 def import_service_profiles(
@@ -136,6 +168,7 @@ def import_service_profiles(
     password: str,
     login_url: str,
     service_profiles_url: str,
+    airline_id: str | int | None = None,
     apply: bool = False,
     timeout: int = 30,
     user_agent: str = DEFAULT_USER_AGENT,
@@ -145,16 +178,22 @@ def import_service_profiles(
     session = session or requests.Session()
     session.headers.update({"User-Agent": user_agent})
     login(session, login_url, username, password, timeout, service_profiles_url)
+    if airline_id is not None:
+        select_airline(session, service_profiles_url, airline_id, timeout)
     overview = session.get(service_profiles_url, timeout=timeout)
     overview.raise_for_status()
     existing = service_profile_map(overview.text, overview.url)
-    result = {"created": [], "skipped_existing": [], "would_create": []}
+    result = {"created": [], "updated": [], "would_create": [], "would_update": []}
     create_form = find_form(BeautifulSoup(overview.text, "html.parser"), CREATE_FORM_ACTION)
 
     for profile in profiles:
         name = profile["name"]
         if name in existing:
-            result["skipped_existing"].append(name)
+            if not apply:
+                result["would_update"].append(name)
+                continue
+            configure_profile(session, profile, existing[name], timeout)
+            result["updated"].append(name)
             continue
         if not apply:
             result["would_create"].append(name)
@@ -166,22 +205,7 @@ def import_service_profiles(
         created_profile = existing.get(name)
         if created_profile is None:
             raise ValueError(f"AirlineSim hat das Profil '{name}' nicht angelegt")
-        detail_url = next(
-            (link["url"] for link in created_profile["detail_links"] if "bearbeiten" in link["label"] or "edit" in link["label"]),
-            None,
-        )
-        if detail_url is None:
-            raise ValueError(f"Kein Bearbeitungslink für das neue Profil '{name}' gefunden")
-        detail_response = session.get(detail_url, timeout=timeout)
-        detail_response.raise_for_status()
-        change_form = find_form(BeautifulSoup(detail_response.text, "html.parser"), CHANGE_FORM_ACTION)
-        submit_form(
-            session,
-            detail_response.url,
-            change_form,
-            change_payload(change_form, saved_form_values(profile), name),
-            timeout,
-        )
+        configure_profile(session, profile, created_profile, timeout)
         result["created"].append(name)
     return result
 
@@ -190,6 +214,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Importiert AirlineSim-Serviceprofile in eine Zielspielwelt.")
     parser.add_argument("--input", default=str(DEFAULT_INPUT_PATH), help="Pfad zur Serviceprofil-Exportdatei")
     parser.add_argument("--apply", action="store_true", help="Profile tatsächlich anlegen und konfigurieren")
+    parser.add_argument("--gameworld", help="Zielspielwelt, z. B. hindenburg")
+    parser.add_argument("--airline-id", help="Airline-ID aus dem ?select=-Parameter der Dashboard-URL")
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     return parser.parse_args()
@@ -198,23 +224,24 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     load_dotenv(PROJECT_ROOT / ".env")
-    settings = get_import_settings()
+    settings = get_import_settings(args.gameworld)
     result = import_service_profiles(
         Path(args.input).expanduser().resolve(),
         username=settings["AS_USERNAME"],
         password=settings["AS_PASSWORD"],
         login_url=settings["AS_LOGIN_URL"],
         service_profiles_url=settings["AS_TARGET_SERVICE_PROFILES_URL"],
+        airline_id=args.airline_id or os.getenv("AS_TARGET_AIRLINE_ID"),
         apply=args.apply,
         timeout=args.timeout,
         user_agent=args.user_agent,
     )
     if args.apply:
-        print(f"Fertig: {len(result['created'])} Profile erstellt, {len(result['skipped_existing'])} bereits vorhanden.")
+        print(f"Fertig: {len(result['created'])} Profile erstellt, {len(result['updated'])} vorhandene Profile aktualisiert.")
     else:
         print(
             f"Vorschau: {len(result['would_create'])} Profile würden erstellt, "
-            f"{len(result['skipped_existing'])} sind bereits vorhanden. Für den Import --apply verwenden."
+            f"{len(result['would_update'])} vorhandene Profile würden aktualisiert. Für den Import --apply verwenden."
         )
 
 

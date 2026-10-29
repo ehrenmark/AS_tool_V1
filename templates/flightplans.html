@@ -12,13 +12,137 @@
         <header class="tool-intro">
             <p class="eyebrow">AirlineSim Tools</p>
             <h1>Flugpläne</h1>
+            <p>Erstelle einen Wochenplan für ein Flugzeug ab einer festen Basis. Alle Zeiten sind UTC.</p>
         </header>
-        <section class="tool-placeholder" aria-labelledby="planningTitle">
-            <span class="tool-badge planned">In Planung</span>
-            <h2 id="planningTitle">Hier entsteht dein Flugplan-Tool</h2>
-            <p>Die automatische Flugplan-Erstellung ist noch nicht verfügbar. Dieser Bereich ist bereits für die spätere Erweiterung vorbereitet.</p>
-            <a class="tool-back" href="{{ url_for('flightplan_map') }}">Bestehende Flugpläne auf der Karte ansehen &rarr;</a>
+        <section class="tool-placeholder planner-panel" aria-labelledby="planningTitle">
+            <h2 id="planningTitle">Vorgaben für dein Flugzeug</h2>
+            <p class="planner-note">Nur eine Vorschau: Es werden keine Flüge in AirlineSim angelegt. Flugzeiten sind manuelle Blockzeiten von Abflug bis Ankunft, keine Entfernungsschätzungen.</p>
+            <form id="plannerForm" method="post" action="{{ url_for('flightplans') }}#plannerResult" data-max-routes="{{ max_routes }}">
+                <div class="planner-settings">
+                    <label class="field">Basis (IATA)
+                        <input name="base" value="{{ values.base }}" placeholder="FRA" pattern="[A-Za-z]{3}" maxlength="3" required autocomplete="off">
+                    </label>
+                    <label class="field">Erster verfügbarer Tag
+                        <select name="start_day">
+                            {% for name in weekdays %}
+                            <option value="{{ loop.index0 }}"{% if values.start_day == loop.index0|string %} selected{% endif %}>{{ name }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label class="field">Verfügbar ab (UTC)
+                        <input name="start_time" type="time" value="{{ values.start_time }}" required>
+                    </label>
+                    <label class="field">Mindestbodenzeit (Minuten)
+                        <input name="ground_minutes" type="number" min="1" max="720" step="1" value="{{ values.ground_minutes }}" required>
+                    </label>
+                </div>
+                <h3>Gewünschte Strecken</h3>
+                <p class="planner-note">Ein Umlauf besteht aus Hinflug, Bodenzeit am Ziel, Rückflug und Bodenzeit an der Basis. Die Bodenzeit gilt nach jedem Flug. Alle Umläufe müssen bis Montag 00:00 UTC der Folgewoche abgeschlossen sein.</p>
+                {% macro route_fields(route) %}
+                    <div class="planner-route-fields">
+                        <label class="field">Ziel (IATA)
+                            <input name="destination" value="{{ route.destination }}" placeholder="LHR" pattern="[A-Za-z]{3}" maxlength="3" required autocomplete="off">
+                        </label>
+                        <label class="field">Hinflug (Minuten)
+                            <input name="outbound" type="number" min="1" max="2880" step="1" value="{{ route.outbound }}" required>
+                        </label>
+                        <label class="field">Rückflug (Minuten)
+                            <input name="inbound" type="number" min="1" max="2880" step="1" value="{{ route.inbound }}" required>
+                        </label>
+                        <label class="field">Umläufe pro Woche
+                            <input name="frequency" type="number" min="1" max="28" step="1" value="{{ route.frequency }}" required>
+                        </label>
+                    </div>
+                    <button class="link-button remove-route" type="button" hidden>Strecke entfernen</button>
+                {% endmacro %}
+                <div id="plannerRoutes">
+                    {% for route in routes %}
+                    <fieldset class="planner-route">
+                        <legend>Strecke {{ loop.index }}</legend>
+                        {{ route_fields(route) }}
+                    </fieldset>
+                    {% endfor %}
+                </div>
+                <template id="plannerRouteTemplate">
+                    <fieldset class="planner-route">
+                        <legend>Weitere Strecke</legend>
+                        {{ route_fields({'destination': '', 'outbound': '', 'inbound': '', 'frequency': '7'}) }}
+                    </fieldset>
+                </template>
+                <div class="planner-actions">
+                    <button class="planner-secondary" id="addRoute" type="button" hidden>Strecke hinzufügen</button>
+                    <button class="action-button" type="submit">Wochenplan erstellen</button>
+                </div>
+                <p class="planner-note">Maximal {{ max_routes }} unterschiedliche Ziele. Freie Zeit wird zwischen den Umläufen verteilt. Keine Prüfung von Reichweite, Slots, Wartung, Nachfrage oder Nachtflugverboten.</p>
+            </form>
+        </section>
+
+        <section id="plannerResult" class="planner-result" aria-label="Planungsergebnis">
+            {% if error %}
+            <p class="planner-warning" role="alert">{{ error }}</p>
+            {% endif %}
+            {% if plan %}
+            <p id="plannerStale" class="planner-warning" role="status" hidden>Die Eingaben wurden geändert. Bitte den Wochenplan neu erstellen; die angezeigte Vorschau ist nicht mehr aktuell.</p>
+            {% if plan.complete %}
+            <p class="planner-success" role="status">Alle {{ plan.summary.requested_rotations }} gewünschten Umläufe sind eingeplant. Das Flugzeug kehrt nach jedem Umlauf zur Basis {{ plan.base }} zurück.</p>
+            {% else %}
+            <div class="planner-warning" role="alert">
+                <strong>Nicht alle Vorgaben passen in diese Woche.</strong>
+                <p>{{ plan.summary.rotations }} von {{ plan.summary.requested_rotations }} Umläufen sind eingeplant. Für alle Vorgaben fehlen mindestens {{ plan.summary.shortfall_minutes }} Minuten. Reduziere Häufigkeiten oder Flugzeiten oder wähle einen früheren Start.</p>
+                <ul>{% for route in plan.unplanned %}<li>{{ route.destination }}: {{ route.count }} Umläufe nicht eingeplant</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+            <section class="tool-placeholder planner-panel" aria-labelledby="summaryTitle">
+                <h2 id="summaryTitle">Deine Wochenvorschau (UTC)</h2>
+                <dl class="planner-summary">
+                    <div><dt>Flüge</dt><dd>{{ plan.flights|length }}</dd></div>
+                    <div><dt>Flugzeit</dt><dd>{{ plan.summary.flight_minutes }} Min.</dd></div>
+                    <div><dt>Bodenzeit</dt><dd>{{ plan.summary.ground_minutes }} Min.</dd></div>
+                    <div><dt>Freie Zeit ab Verfügbarkeit</dt><dd>{{ plan.summary.idle_minutes }} Min.</dd></div>
+                </dl>
+                <p class="planner-note">{% if plan.flights %}Letzter Umlauf einschließlich Bodenzeit beendet: {{ plan.summary.ready_label }} UTC. {% endif %}Die Vorschau beginnt am gewählten Verfügbarkeitstag und endet zum Wochenwechsel. Umläufe über den Wochenwechsel werden nicht geplant.</p>
+                <div class="planner-week">
+                    {% for day in plan.days %}
+                    <section class="planner-day">
+                        <h3>{{ day.name }}</h3>
+                        {% for flight in day.flights %}
+                        <a href="#flight-{{ flight.number }}" class="planner-flight">
+                            <strong>{{ flight.origin }} &rarr; {{ flight.destination }}</strong>
+                            <span>{{ flight.departure_label }} &ndash; {{ flight.arrival_label }}</span>
+                        </a>
+                        {% else %}
+                        <p class="planner-note">Keine Abflüge</p>
+                        {% endfor %}
+                    </section>
+                    {% endfor %}
+                </div>
+                <p class="planner-note">Zuordnung nach Abflugtag; ein Flug kann über Mitternacht hinaus dauern. Tage ohne Abflüge sind nicht automatisch freie Tage.</p>
+            </section>
+            <section class="tool-placeholder planner-panel" aria-labelledby="flightsTitle">
+                <h2 id="flightsTitle">Flugliste</h2>
+                {% if plan.flights %}
+                <div class="planner-table-scroll" role="region" aria-label="Flugliste mit UTC-Zeiten" tabindex="0">
+                    <table class="planner-table">
+                        <caption>Abflug, Ankunft und Ende der Mindestbodenzeit in UTC</caption>
+                        <thead><tr><th scope="col">Leg</th><th scope="col">Strecke</th><th scope="col">Abflug</th><th scope="col">Ankunft</th><th scope="col">Flugzeit</th><th scope="col">Bereit ab</th></tr></thead>
+                        <tbody>
+                        {% for flight in plan.flights %}
+                        <tr id="flight-{{ flight.number }}"><th scope="row">{{ flight.number }}</th><td>{{ flight.origin }} &rarr; {{ flight.destination }}</td><td>{{ flight.departure_label }}</td><td>{{ flight.arrival_label }}</td><td>{{ flight.duration }} Min.</td><td>{{ flight.ready_label }}</td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p>Kein vollständiger Hin-/Rückflug passt in das verfügbare Zeitfenster.</p>
+                {% endif %}
+                <details>
+                    <summary>Freie Zeitfenster an der Basis</summary>
+                    <ul class="planner-idle">{% for gap in plan.idle %}<li>{{ gap.start_label }} &ndash; {{ gap.end_label }} UTC: {{ gap.minutes }} Minuten</li>{% else %}<li>Keine freie Zeit zusätzlich zu den Mindestbodenzeiten.</li>{% endfor %}</ul>
+                </details>
+            </section>
+            {% endif %}
         </section>
     </main>
+    <script src="{{ url_for('static', filename='js/planner.js') }}" defer></script>
 </body>
 </html>

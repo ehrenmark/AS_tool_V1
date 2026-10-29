@@ -44,13 +44,13 @@ class ToolPageTests(unittest.TestCase):
         self.assertIn('/static/js/app.js', scripts)
         self.assertIn('/static/js/demand-filters.js', scripts)
 
-    def test_flightplans_page_is_explicit_placeholder_with_navigation(self):
+    def test_flightplans_page_has_planner_and_navigation(self):
         page = self.page('/flugplaene')
         self.assertEqual(page.h1.text, 'Flugpläne')
-        self.assertIn('noch nicht verfügbar', page.text)
+        self.assertIsNotNone(page.select_one('#plannerForm[method="post"]'))
+        self.assertIn('keine Flüge in AirlineSim', page.text)
         self.assertIsNotNone(page.select_one('a[href="/"]'))
-        self.assertIsNotNone(page.select_one('a[href="/map"]'))
-        self.assertFalse(page.find_all('script'))
+        self.assertIsNotNone(page.select_one('script[src="/static/js/planner.js"]'))
 
 
 if __name__ == '__main__':

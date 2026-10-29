@@ -53,7 +53,7 @@ class ServiceProfileImporterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "nicht verfügbar"):
             change_payload(form, {"dry": "3"}, "Comfort")
 
-    def test_preview_never_submits_create_requests_and_skips_existing(self):
+    def test_preview_never_submits_requests_and_reports_existing_profiles_as_updates(self):
         with TemporaryDirectory() as directory:
             input_path = Path(directory) / "profiles.json"
             input_path.write_text(json.dumps({"profiles": [
@@ -72,7 +72,7 @@ class ServiceProfileImporterTests(unittest.TestCase):
                     session=session,
                 )
 
-        self.assertEqual(result, {"created": [], "skipped_existing": ["Existing"], "would_create": ["New"]})
+        self.assertEqual(result, {"created": [], "updated": [], "would_create": ["New"], "would_update": ["Existing"]})
         self.assertEqual(session.posts, [])
 
 

@@ -5,9 +5,37 @@
 Die Startseite `/` bietet Kacheln fuer die verfuegbaren und geplanten Tools.
 Die bestehende Flugplan-Karte ist unter `/map` erreichbar; Karten-Links mit
 Auswahlparametern verwenden beispielsweise `/map?airlines=80`.
-`/flugplaene` ist vorerst eine als **In Planung** gekennzeichnete Platzhalterseite.
-Die automatische Flugplan-Erstellung ist dort noch nicht implementiert.
+`/flugplaene` erstellt eine Wochenvorschau fuer ein Flugzeug ab einer festen Basis.
 Beide Tool-Seiten verlinken zurueck zur Startseite.
+
+### Wochenplaner
+
+Basis und Ziele werden als dreistellige IATA-Codes eingegeben. Die Codes werden
+formal geprueft, aber nicht mit der Flughafen-Datenbank abgeglichen.
+Pro Ziel werden manuelle Blockzeiten fuer Hin- und Rueckflug (je 1 bis 2880 Minuten)
+und 1 bis 28 gewuenschte Umlaeufe angegeben. Bis zu 20 unterschiedliche Ziele
+sind moeglich. Die Mindestbodenzeit (1 bis 720 Minuten) gilt nach jedem Flug,
+auch nach der Rueckkehr zur Basis. Alle Ein- und Ausgaben sind UTC.
+
+Der Plan beginnt am gewaehlten Wochentag zur angegebenen Verfuegbarkeitszeit
+und endet Montag 00:00 UTC der Folgewoche. Das Flugzeug startet an der Basis
+flugbereit. Jeder Umlauf kehrt zur Basis zurueck und muss einschliesslich der
+abschliessenden Bodenzeit in dieses Zeitfenster passen. Die Ziele werden nach
+ihren gewuenschten Haeufigkeiten verschachtelt; freie Kapazitaet wird zwischen
+den Umlaeufen verteilt. Es wird keine wirtschaftliche Optimierung vorgenommen.
+
+Reicht die Zeit nicht, zeigt die Vorschau nur vollstaendige Umlaeufe und nennt
+die nicht eingeplanten Umlaeufe pro Ziel sowie die mindestens fehlenden Minuten.
+Wochenansicht, Flugliste und freie Zeitfenster werden aus denselben berechneten
+Zeitpunkten erzeugt. Tageswechsel und unterschiedliche Flugzeiten je Richtung
+werden beruecksichtigt. Freie Zeitfenster liegen an der Basis und enthalten
+nicht die bereits reservierten Mindestbodenzeiten.
+
+Die Vorschau wird weder gespeichert noch in AirlineSim uebertragen. Umlaeufe
+ueber den Wochenwechsel werden nicht geplant. Reichweiten, Wartung, Nachtflugverbote,
+Slots, Nachfrage und Anschlusswellen werden noch nicht geprueft. Mehrere
+Strecken lassen sich mit aktiviertem JavaScript hinzufuegen und entfernen;
+die Planung einer einzelnen Strecke funktioniert auch ohne JavaScript.
 
 ## Datenbanken
 
