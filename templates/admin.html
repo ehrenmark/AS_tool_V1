@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirlineSim Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="tool-page">
+    <main class="tool-shell">
+        <header class="tool-intro">
+            <a class="tool-back" href="{{ url_for('index') }}">Zur Tool-Auswahl</a>
+            <p class="eyebrow">Administration</p>
+            <h1>Daten verwalten</h1>
+            <p>Die Aktionen laufen im Hintergrund. Es kann immer nur ein Import laufen.</p>
+        </header>
+        <section class="tool-grid" aria-label="Datenaktualisierung">
+            <div class="tool-card">
+                <h2>Neue Airlines einpflegen</h2>
+                <p>Verzeichnis und Spielerzuordnungen abgleichen und Flugpläne neu gefundener Airlines laden.</p>
+                <button class="action-button" data-mode="scan" type="button">Neue Airlines einpflegen</button>
+            </div>
+            <div class="tool-card">
+                <h2>Alle Airlines aktualisieren</h2>
+                <p>Daten und Flugpläne aller Airlines des Servers einschließlich ihrer Spielerzuordnungen aktualisieren. Flughafendaten bleiben unverändert.</p>
+                <button class="action-button" data-mode="all" type="button">Alle Airlines aktualisieren</button>
+            </div>
+        </section>
+        <p class="data-state" id="adminStatus" role="status" aria-live="polite">Bereit.</p>
+        <button class="action-button" id="resumeStatus" type="button" hidden>Status erneut abfragen</button>
+    </main>
+    <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+</body>
+</html>

@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
+import requests
+
 try:
     from jobs.scrape_flightplan import (
         DEFAULT_BASE_URL,
@@ -139,7 +141,7 @@ class LeaseHeartbeat:
 
 
 def complete_run(db_path: Path, run_id: int, result: ScrapeResult) -> None:
-    if result.enterprises_failed == 0:
+    if not result.failures and result.enterprises_failed == 0:
         status = "success"
     elif result.enterprises_succeeded:
         status = "partial"
@@ -215,10 +217,40 @@ def execute_refresh(
         raise
 
 
+def refresh_all_data(
+    db_path: Path, *,
+    progress_callback: Callable[[], None] | None = None,
+    **options: object,
+) -> ScrapeResult:
+    try:
+        from jobs.scrape_airports import AirportImportError, scrape_airports
+        from jobs.add_airport_coordinates import DEFAULT_AIRPORTS_CSV_URL, update_coordinates
+    except ModuleNotFoundError:
+        from scrape_airports import AirportImportError, scrape_airports
+        from add_airport_coordinates import DEFAULT_AIRPORTS_CSV_URL, update_coordinates
+
+    result = scrape_all_enterprises(db_path, progress_callback=progress_callback, **options)
+    try:
+        scrape_airports(argparse.Namespace(
+            db_path=str(db_path), discover=True, timeout=20, delay=0.5,
+            user_agent=DEFAULT_USER_AGENT, stop_after_missing=100,
+        ), progress_callback=progress_callback)
+    except (AirportImportError, ValueError, sqlite3.Error, requests.RequestException) as error:
+        result.failures.append(f"Flughäfen: {error}")
+    update_coordinates(argparse.Namespace(
+        db_path=str(db_path), source=DEFAULT_AIRPORTS_CSV_URL,
+        overwrite=False, verbose=False,
+    ), progress_callback=progress_callback)
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Refresh all flightplans safely in SQLite.")
     parser.add_argument("--db-path", default=os.getenv("AS_DB_PATH", str(DEFAULT_DB_PATH)))
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--all-data", action="store_true", help="Auch alle Flughafendaten aktualisieren")
+    mode.add_argument("--scan-new", action="store_true", help="Verzeichnis und Spieler scannen; nur neue Flugpläne laden")
     parser.add_argument(
         "--enterprise-id", type=int, action="append",
         help="Nur diese Airline aktualisieren; für mehrere Airlines wiederholbar",
@@ -240,6 +272,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.enterprise_id and any(enterprise_id <= 0 for enterprise_id in args.enterprise_id):
         parser.error("--enterprise-id muss positiv sein")
+    if args.enterprise_id and (args.all_data or args.scan_new):
+        parser.error("--enterprise-id kann nicht mit --all-data oder --scan-new kombiniert werden")
     if args.request_delay < 0:
         parser.error("--request-delay darf nicht negativ sein")
     return args
@@ -252,7 +286,9 @@ def main() -> None:
         started = time.monotonic()
         try:
             options = {}
-            scraper = scrape_all_enterprises
+            scraper = refresh_all_data if args.all_data else scrape_all_enterprises
+            if args.scan_new:
+                options["new_only"] = True
             if args.enterprise_id:
                 scraper = scrape_enterprises
                 options["enterprises"] = [

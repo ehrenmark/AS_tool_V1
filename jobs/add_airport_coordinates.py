@@ -5,7 +5,7 @@ import os
 import sqlite3
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "hindenburg_v5.sqlite3"
@@ -89,7 +89,9 @@ def find_coordinate_match(
     return None, None
 
 
-def update_coordinates(args: argparse.Namespace) -> None:
+def update_coordinates(
+    args: argparse.Namespace, progress_callback: Callable[[], None] | None = None,
+) -> None:
     db_path = Path(args.db_path).expanduser().resolve()
     connection = connect_to_sqlite(db_path)
 
@@ -97,6 +99,12 @@ def update_coordinates(args: argparse.Namespace) -> None:
         ensure_coordinate_columns(connection)
         coordinate_rows = load_ourairports_rows(args.source)
         by_icao, by_iata = index_coordinate_rows(coordinate_rows)
+        if progress_callback:
+            progress_callback()
+        connection.execute("BEGIN IMMEDIATE")
+        guard = getattr(progress_callback, "assert_transaction", None)
+        if guard:
+            guard(connection)
 
         airports = connection.execute(
             """

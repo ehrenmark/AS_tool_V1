@@ -18,6 +18,15 @@ DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "hindenburg_v5.sqlite3"
 DEFAULT_BASE_URL = "https://hindenburg.airlinesim.aero"
 DEFAULT_USER_AGENT = "AS-tool flightplan scraper (+local development)"
 
+CREATE_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY CHECK (user_id > 0),
+    username TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 CREATE_AIRLINES_SQL = """
 CREATE TABLE IF NOT EXISTS airlines (
     enterprise_id INTEGER PRIMARY KEY CHECK (enterprise_id > 0),
@@ -27,7 +36,8 @@ CREATE TABLE IF NOT EXISTS airlines (
     last_seen_at TEXT,
     last_attempt_at TEXT,
     last_success_at TEXT,
-    last_error TEXT
+    last_error TEXT,
+    user_id INTEGER REFERENCES users(user_id)
 )
 """
 
@@ -118,7 +128,12 @@ def ensure_table(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
     try:
         connection.execute("BEGIN IMMEDIATE")
+        connection.execute(CREATE_USERS_SQL)
         connection.execute(CREATE_AIRLINES_SQL)
+        airline_columns = {row[1] for row in connection.execute("PRAGMA table_info(airlines)")}
+        if "user_id" not in airline_columns:
+            connection.execute("ALTER TABLE airlines ADD COLUMN user_id INTEGER REFERENCES users(user_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_airlines_user ON airlines(user_id)")
         columns = {row[1] for row in connection.execute("PRAGMA table_info(flightplan_flights)")}
         if columns and "is_via_summary" not in columns:
             cursor = connection.execute("SELECT * FROM flightplan_flights ORDER BY id")
@@ -262,7 +277,11 @@ def parse_enterprise_directory(base_url: str, html: str) -> list[dict[str, Any]]
     return result
 
 
-def discover_enterprises(session: requests.Session, base_url: str, timeout: int) -> list[dict[str, Any]]:
+def discover_enterprises(
+    session: requests.Session, base_url: str, timeout: int,
+    request_delay: float = 0.75,
+    progress_callback: Callable[[], None] | None = None,
+) -> list[dict[str, Any]]:
     directory_url = build_enterprise_directory_url(base_url)
     response = session.get(directory_url, timeout=timeout)
     response.raise_for_status()
@@ -272,6 +291,9 @@ def discover_enterprises(session: requests.Session, base_url: str, timeout: int)
 
     enterprises = {}
     for letter in letters:
+        if progress_callback:
+            progress_callback()
+        time.sleep(request_delay)
         response = session.get(build_enterprise_directory_url(base_url, letter), timeout=timeout)
         response.raise_for_status()
         for enterprise in parse_enterprise_directory(response.url, response.text):
@@ -279,6 +301,55 @@ def discover_enterprises(session: requests.Session, base_url: str, timeout: int)
     if not enterprises:
         raise ValueError("Keine Enterprises im Verzeichnis gefunden")
     return sorted(enterprises.values(), key=lambda item: item["enterprise_name"].casefold())
+
+
+def fetch_enterprise_owner(
+    session: requests.Session, base_url: str, enterprise_id: int, timeout: int,
+) -> dict[str, Any]:
+    source_url = urljoin(base_url, f"/app/info/enterprises/{enterprise_id}")
+    response = session.get(source_url, timeout=timeout)
+    response.raise_for_status()
+    if urlparse(response.url).path.rstrip("/") != f"/app/info/enterprises/{enterprise_id}":
+        raise ValueError("Airline-Abruf wurde auf eine unerwartete Seite umgeleitet")
+    soup = BeautifulSoup(response.text, "html.parser")
+    for row in soup.select("tr"):
+        cells = row.find_all(["td", "th"], recursive=False)
+        if len(cells) < 2 or normalize_text(cells[0].get_text()).rstrip(":") not in (
+            "Managing director", "Geschäftsführer",
+        ):
+            continue
+        anchor = cells[1].find("a", href=True)
+        if anchor is None:
+            raise ValueError("Spieler-Link der Airline fehlt")
+        user_url = urljoin(response.url, anchor["href"])
+        match = re.fullmatch(r"/app/info/users/([1-9]\d*)/?", urlparse(user_url).path)
+        username = normalize_text(anchor.get_text())
+        if not match or not username:
+            raise ValueError("Ungültiger Spieler-Link der Airline")
+        return {"user_id": int(match.group(1)), "username": username, "source_url": user_url}
+    raise ValueError("Geschäftsführer auf der Airline-Seite fehlt")
+
+
+def store_enterprise_owner(
+    connection: sqlite3.Connection, enterprise_id: int, owner: dict[str, Any],
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+) -> None:
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if transaction_guard:
+            transaction_guard(connection)
+        connection.execute(
+            """INSERT INTO users (user_id, username, source_url) VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET username = excluded.username,
+                source_url = excluded.source_url, last_seen_at = CURRENT_TIMESTAMP""",
+            (owner["user_id"], owner["username"], owner["source_url"]),
+        )
+        connection.execute("UPDATE airlines SET user_id = ? WHERE enterprise_id = ?",
+                           (owner["user_id"], enterprise_id))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def extract_enterprise_name(soup: BeautifulSoup) -> str | None:
@@ -580,24 +651,51 @@ def scrape_all_enterprises(
     user_agent: str = DEFAULT_USER_AGENT,
     session: requests.Session | None = None,
     progress_callback: Callable[[], None] | None = None,
+    new_only: bool = False,
 ) -> ScrapeResult:
     owns_session = session is None
     session = session or create_session(user_agent)
     session.headers.update({"User-Agent": user_agent})
     try:
-        enterprises = discover_enterprises(session, base_url, timeout)
+        enterprises = discover_enterprises(session, base_url, timeout, request_delay, progress_callback)
         if progress_callback:
             progress_callback()
         connection = connect_to_sqlite(db_path)
         try:
             ensure_table(connection)
+            known_ids = {row[0] for row in connection.execute("SELECT enterprise_id FROM airlines")}
             store_directory(connection, enterprises, base_url,
                             getattr(progress_callback, "assert_transaction", None))
+            owner_failures = {}
+            for enterprise in enterprises:
+                if progress_callback:
+                    progress_callback()
+                try:
+                    owner = fetch_enterprise_owner(session, base_url, enterprise["enterprise_id"], timeout)
+                    store_enterprise_owner(
+                        connection, enterprise["enterprise_id"], owner,
+                        getattr(progress_callback, "assert_transaction", None),
+                    )
+                except (requests.RequestException, ValueError, sqlite3.Error) as error:
+                    owner_failures[enterprise["enterprise_id"]] = (
+                        f"{enterprise['enterprise_name']} (Spieler): {error}"
+                    )
+                    connection.execute("BEGIN IMMEDIATE")
+                    guard = getattr(progress_callback, "assert_transaction", None)
+                    if guard:
+                        guard(connection)
+                    connection.execute(
+                        "UPDATE airlines SET last_attempt_at = CURRENT_TIMESTAMP, last_error = ? "
+                        "WHERE enterprise_id = ?", (str(error), enterprise["enterprise_id"]),
+                    )
+                    connection.commit()
+                time.sleep(request_delay)
         finally:
             connection.close()
-        return scrape_enterprises(
+        selected = [item for item in enterprises if not new_only or item["enterprise_id"] not in known_ids]
+        result = scrape_enterprises(
             db_path,
-            enterprises,
+            selected,
             base_url=base_url,
             timeout=timeout,
             request_delay=request_delay,
@@ -606,6 +704,25 @@ def scrape_all_enterprises(
             session=session,
             progress_callback=progress_callback,
         )
+        # Metadata failures must remain visible even if the flightplan succeeded.
+        if owner_failures:
+            connection = connect_to_sqlite(db_path)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                guard = getattr(progress_callback, "assert_transaction", None)
+                if guard:
+                    guard(connection)
+                for enterprise_id, error in owner_failures.items():
+                    connection.execute(
+                        "UPDATE airlines SET last_error = CASE WHEN last_error IS NULL THEN ? "
+                        "ELSE last_error || char(10) || ? END WHERE enterprise_id = ?",
+                        (error, error, enterprise_id),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+        result.failures.extend(owner_failures.values())
+        return result
     finally:
         if owns_session:
             session.close()

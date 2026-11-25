@@ -1,4 +1,6 @@
+import hmac
 import math
+import os
 import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
@@ -6,10 +8,12 @@ from pathlib import Path
 from threading import Thread
 
 from flask import Flask, jsonify, render_template, request
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from flightplan_planner import MAX_ROUTES, WEEKDAYS, generate_weekly_plan
 from jobs.refresh_flightplans import acquire_run, execute_refresh, fail_run
-from jobs.scrape_flightplan import scrape_enterprises
+from jobs.scrape_flightplan import scrape_enterprises, scrape_all_enterprises
+from jobs.export_service_profiles import load_dotenv
 
 
 ROUTE_SEGMENT_DEGREES = 2
@@ -97,7 +101,19 @@ def route_bearing(start, end):
     )
     return (math.degrees(math.atan2(x, y)) + 360) % 360
 
+def admin_credentials():
+    password_hash = os.getenv('AS_ADMIN_PASSWORD_HASH', '')
+    if not password_hash and os.getenv('AS_ADMIN_PASSWORD'):
+        password_hash = generate_password_hash(os.environ['AS_ADMIN_PASSWORD'])
+    return {
+        'ADMIN_USERNAME': os.getenv('AS_ADMIN_USERNAME', ''),
+        'ADMIN_PASSWORD_HASH': password_hash,
+    }
+
+
 app = Flask(__name__)
+load_dotenv(Path(__file__).resolve().parent / '.env')
+app.config.update(admin_credentials())
 DATABASE_PATH = Path(__file__).resolve().parent / 'data' / 'hindenburg_v5.sqlite3'
 
 
@@ -134,6 +150,22 @@ def parse_analysis_filters():
     if len(enterprise_ids) > 2:
         raise ValueError('enterprise_ids darf höchstens zwei eindeutige IDs enthalten')
 
+    user_id = parse_user_id()
+    if user_id is not None and enterprise_ids:
+        raise ValueError('user_id und enterprise_id(s) dürfen nicht gemeinsam verwendet werden')
+    if user_id is not None:
+        connection = connect_database() if DATABASE_PATH.exists() else None
+        try:
+            enterprise_ids = [
+                row[0] for row in connection.execute(
+                    'SELECT enterprise_id FROM airlines WHERE user_id = ? AND is_active = 1',
+                    (user_id,),
+                )
+            ] if connection and 'user_id' in table_columns(connection, 'airlines') else []
+        finally:
+            if connection:
+                connection.close()
+
     weekday_value = request.args.get('weekday')
     if len(request.args.getlist('weekday')) > 1:
         raise ValueError('weekday darf nur einmal angegeben werden')
@@ -153,8 +185,21 @@ def parse_analysis_filters():
                 or int(time_value[:2]) > 23 or int(time_value[3:]) > 59):
             raise ValueError('time muss dem Format HH:MM entsprechen')
         minute = int(time_value[:2]) * 60 + int(time_value[3:])
-    return {'enterprise_ids': enterprise_ids, 'weekday': weekday,
-            'time': time_value, 'minute': minute}
+    filters = {'enterprise_ids': enterprise_ids, 'weekday': weekday,
+               'time': time_value, 'minute': minute}
+    if user_id is not None:
+        filters['user_id'] = user_id
+    return filters
+
+
+def parse_user_id():
+    values = request.args.getlist('user_id')
+    if not values:
+        return None
+    if (len(values) != 1 or not values[0].isascii() or not values[0].isdigit()
+            or not 0 < int(values[0]) <= 9223372036854775807):
+        raise ValueError('user_id muss eine positive ganze Zahl sein')
+    return int(values[0])
 
 
 def selected_enterprise_id():
@@ -246,6 +291,8 @@ def load_flights(connection, filters, require_coordinates=False):
     if ids:
         where.append('f.enterprise_id IN (' + ','.join('?' for _ in ids) + ')')
         parameters.extend(ids)
+    elif filters.get('user_id') is not None:
+        where.append('0 = 1')
     origin_latitude = 'origin.latitude' if 'latitude' in airport_columns else 'NULL'
     origin_longitude = 'origin.longitude' if 'longitude' in airport_columns else 'NULL'
     destination_latitude = 'destination.latitude' if 'latitude' in airport_columns else 'NULL'
@@ -293,18 +340,93 @@ def airline_summary(rows):
 
 
 def filter_metadata(filters, rows):
-    return {
+    metadata = {
         'enterprise_ids': filters['enterprise_ids'],
         'weekday': filters['weekday'],
         'time': filters['time'],
         'flight_count': len(rows),
         'airlines': airline_summary(rows),
     }
+    if filters.get('user_id') is not None:
+        metadata['user_id'] = filters['user_id']
+    return metadata
 
 
 @app.route('/')
 def index():
     return render_template('landing.html')
+
+
+@app.before_request
+def protect_admin():
+    if request.path != '/admin' and not request.path.startswith('/api/admin/'):
+        return None
+    username = app.config['ADMIN_USERNAME']
+    password_hash = app.config['ADMIN_PASSWORD_HASH']
+    if not username or not password_hash:
+        return jsonify({'error': 'Admin-Zugang ist noch nicht konfiguriert.'}), 503
+    auth = request.authorization
+    if (auth is None or auth.type != 'basic'
+            or not hmac.compare_digest((auth.username or '').encode(), username.encode())
+            or not check_password_hash(password_hash, auth.password or '')):
+        response = jsonify({'error': 'Admin-Anmeldung erforderlich.'})
+        response.status_code = 401
+        response.headers['WWW-Authenticate'] = 'Basic realm="AirlineSim Admin", charset="UTF-8"'
+        return response
+    if request.method == 'POST' and request.headers.get('X-Requested-With') != 'XMLHttpRequest':
+        return jsonify({'error': 'Update muss über die Admin-Seite angefordert werden.'}), 403
+
+
+@app.after_request
+def admin_cache_headers(response):
+    if request.path == '/admin' or request.path.startswith('/api/admin/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.get('/admin')
+def admin():
+    return render_template('admin.html')
+
+
+def update_admin_data(db_path, run_id, mode):
+    try:
+        options = {'new_only': True} if mode == 'scan' else {}
+        execute_refresh(
+            db_path, run_id,
+            scraper=scrape_all_enterprises,
+            **options,
+        )
+    except Exception:
+        app.logger.exception("Admin-Update %s fehlgeschlagen", run_id)
+
+
+@app.post('/api/admin/refresh/<mode>')
+def start_admin_update(mode):
+    if mode not in ('scan', 'all'):
+        return jsonify({'error': 'Unbekannter Update-Modus.'}), 400
+    if not DATABASE_PATH.exists():
+        return jsonify({'error': 'Datenbank ist nicht verfügbar.'}), 503
+    db_path = DATABASE_PATH
+    try:
+        run_id = acquire_run(db_path, stale_after_seconds=7200)
+    except sqlite3.Error:
+        app.logger.exception("Admin-Update konnte nicht reserviert werden")
+        return jsonify({'error': 'Update konnte nicht gestartet werden.'}), 503
+    if run_id is None:
+        return jsonify({'error': 'Es läuft bereits ein Import.'}), 409
+    try:
+        Thread(target=update_admin_data, args=(db_path, run_id, mode), daemon=True).start()
+    except Exception as error:
+        fail_run(db_path, run_id, error)
+        app.logger.exception("Admin-Hintergrundjob konnte nicht gestartet werden")
+        return jsonify({'error': 'Hintergrundjob konnte nicht gestartet werden.'}), 503
+    return jsonify({'run_id': run_id, 'mode': mode}), 202
+
+
+@app.get('/api/admin/refresh/<int:run_id>')
+def admin_update_status(run_id):
+    return airline_update_status(run_id)
 
 
 @app.route('/map')
@@ -388,6 +510,10 @@ def airports():
 
 @app.route('/api/flightplan/airlines')
 def flightplan_airlines():
+    try:
+        user_id = parse_user_id()
+    except ValueError as error:
+        return error_response(error)
     if not DATABASE_PATH.exists():
         return jsonify([])
 
@@ -396,6 +522,11 @@ def flightplan_airlines():
         columns = table_columns(connection, 'flightplan_flights')
         airline_columns = table_columns(connection, 'airlines')
         if {'enterprise_id', 'enterprise_name', 'is_active'} <= airline_columns:
+            owner_select = ', a.user_id, u.username' if 'user_id' in airline_columns else ''
+            owner_join = ' LEFT JOIN users u ON u.user_id = a.user_id' if owner_select else ''
+            owner_where = ' AND a.user_id = ?' if user_id is not None and owner_select else ''
+            if user_id is not None and not owner_select:
+                return jsonify([])
             flight_count = (
                 '(SELECT COUNT(*) FROM flightplan_flights f '
                 'WHERE f.enterprise_id = a.enterprise_id)'
@@ -403,13 +534,13 @@ def flightplan_airlines():
             )
             rows = connection.execute(
                 f"""
-                SELECT a.enterprise_id, a.enterprise_name, {flight_count} AS flight_count
-                FROM airlines a WHERE a.is_active = 1
+                SELECT a.enterprise_id, a.enterprise_name, {flight_count} AS flight_count{owner_select}
+                FROM airlines a{owner_join} WHERE a.is_active = 1{owner_where}
                 ORDER BY a.enterprise_name COLLATE NOCASE, a.enterprise_id
-                """
+                """, (user_id,) if owner_where else (),
             ).fetchall()
             return jsonify([dict(row) for row in rows])
-        if 'enterprise_id' not in columns:
+        if 'enterprise_id' not in columns or user_id is not None:
             return jsonify([])
         enterprise_name = (
             "COALESCE(NULLIF(enterprise_name, ''), 'Airline ' || enterprise_id)"
@@ -431,6 +562,25 @@ def flightplan_airlines():
         connection.close()
 
     return jsonify([dict(row) for row in rows])
+
+
+@app.get('/api/players')
+def players():
+    if not DATABASE_PATH.exists():
+        return jsonify([])
+    connection = connect_database()
+    try:
+        if not table_columns(connection, 'users') or 'user_id' not in table_columns(connection, 'airlines'):
+            return jsonify([])
+        rows = connection.execute(
+            """SELECT u.user_id, u.username, COUNT(*) AS airline_count
+            FROM users u JOIN airlines a ON a.user_id = u.user_id
+            WHERE a.is_active = 1 GROUP BY u.user_id
+            ORDER BY u.username COLLATE NOCASE, u.user_id"""
+        ).fetchall()
+        return jsonify([dict(row) for row in rows])
+    finally:
+        connection.close()
 
 
 def update_airline_flightplan(db_path, run_id, enterprise):
@@ -536,7 +686,7 @@ def flightplan_routes():
         row = group['rows'][0]
         airline_ids = sorted(group['airlines'])
         comparison_class = None
-        if len(selected) == 2:
+        if len(selected) == 2 and filters.get('user_id') is None:
             comparison_class = ('shared' if set(selected) <= group['airlines'] else
                                 'primary_only' if selected[0] in group['airlines'] else 'secondary_only')
         properties = {
@@ -841,7 +991,7 @@ def analysis_kpis():
         'aircraft_type_counts': dict(sorted(aircraft_type_counts.items())),
         'longest_routes': longest_routes[:5],
     }
-    if len(filters['enterprise_ids']) == 2:
+    if len(filters['enterprise_ids']) == 2 and filters.get('user_id') is None:
         first, second = filters['enterprise_ids']
         data['comparison'] = {
             'primary_only': sum(1 for ids in route_sets.values() if first in ids and second not in ids),

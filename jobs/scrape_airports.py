@@ -1,11 +1,13 @@
 import argparse
+import io
 import os
 import re
 import sqlite3
+import sys
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -15,6 +17,11 @@ BASE_URL = "https://hindenburg.airlinesim.aero/app/info/airports/{airport_id}"
 DEFAULT_USER_AGENT = "AS-tool airport scraper (+local development)"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "hindenburg_v5.sqlite3"
+
+
+class AirportImportError(RuntimeError):
+    pass
+
 
 FIELD_MAP = {
     "Aktuelle Ortszeit": "local_time",
@@ -214,7 +221,10 @@ def fetch_airport_html(session: requests.Session, airport_id: int, timeout: int)
     return response.text
 
 
-def discover_airport_ids(session: requests.Session, timeout: int, delay: float) -> list[int]:
+def discover_airport_ids(
+    session: requests.Session, timeout: int, delay: float,
+    progress_callback: Callable[[], None] | None = None,
+) -> list[int]:
     directory_url = urljoin(BASE_URL, "/action/info/countries")
     response = session.get(directory_url, timeout=timeout)
     response.raise_for_status()
@@ -231,6 +241,8 @@ def discover_airport_ids(session: requests.Session, timeout: int, delay: float) 
     pending_urls = deque(sorted(country_urls))
     visited_urls = set()
     while pending_urls:
+        if progress_callback:
+            progress_callback()
         country_url = pending_urls.popleft()
         if country_url in visited_urls:
             continue
@@ -266,7 +278,11 @@ def discover_airport_ids(session: requests.Session, timeout: int, delay: float) 
     return sorted(airport_ids)
 
 
-def scrape_airports(args: argparse.Namespace) -> None:
+def scrape_airports(
+    args: argparse.Namespace, progress_callback: Callable[[], None] | None = None,
+) -> None:
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(errors="backslashreplace")
     db_path = Path(args.db_path).expanduser().resolve()
     connection = connect_to_sqlite(db_path)
     session = requests.Session()
@@ -282,12 +298,16 @@ def scrape_airports(args: argparse.Namespace) -> None:
     try:
         ensure_table(connection)
         if args.discover:
-            airport_ids = discover_airport_ids(session, args.timeout, args.delay)
+            airport_ids = discover_airport_ids(
+                session, args.timeout, args.delay, progress_callback,
+            )
             print(f"Flughäfen im Länder-Verzeichnis: {len(airport_ids)}")
         else:
             airport_ids = range(args.start_id, args.end_id + 1)
 
         for airport_id in airport_ids:
+            if progress_callback:
+                progress_callback()
             try:
                 html = fetch_airport_html(session, airport_id, args.timeout)
                 if html is None:
@@ -300,6 +320,10 @@ def scrape_airports(args: argparse.Namespace) -> None:
                     continue
 
                 airport_data = parse_airport_page(airport_id, html)
+                connection.execute("BEGIN IMMEDIATE")
+                guard = getattr(progress_callback, "assert_transaction", None)
+                if guard:
+                    guard(connection)
                 connection.execute(UPSERT_SQL, airport_data)
                 connection.commit()
                 saved_count += 1
@@ -328,6 +352,10 @@ def scrape_airports(args: argparse.Namespace) -> None:
         "Fertig: "
         f"{saved_count} gespeichert, {skipped_count} übersprungen, {failed_count} fehlgeschlagen"
     )
+    if failed_count or (args.discover and skipped_count):
+        raise AirportImportError(
+            f"Flughafen-Import unvollständig: {failed_count} Fehler, {skipped_count} fehlende Flughäfen"
+        )
 
 
 def parse_args() -> argparse.Namespace:

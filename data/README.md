@@ -8,6 +8,38 @@ Auswahlparametern verwenden beispielsweise `/map?airlines=80`.
 `/flugplaene` erstellt eine Wochenvorschau fuer ein Flugzeug ab einer festen Basis.
 Beide Tool-Seiten verlinken zurueck zur Startseite.
 
+### Administration
+
+Die Admin-Kachel fuehrt nach `/admin`. Die Seite und saemtliche
+`/api/admin/*`-Endpunkte verlangen HTTP-Basic-Anmeldung. Dafuer in der lokalen
+`.env` bzw. den Deployment-Umgebungsvariablen `AS_ADMIN_USERNAME` und
+`AS_ADMIN_PASSWORD` setzen. Die Anwendung hasht das Passwort beim Start intern.
+Alternativ kann `AS_ADMIN_PASSWORD_HASH` gesetzt werden; ein nicht leerer Hash
+hat Vorrang vor dem Passwort. Ein eigenes Passwort verwenden, nicht das
+AirlineSim-Passwort. Einen Hash optional lokal erzeugen:
+
+```powershell
+python -c "import getpass; from werkzeug.security import generate_password_hash; print(generate_password_hash(getpass.getpass('Admin password: ')))"
+```
+
+Nur diese Zugangsdaten erlauben den Zugriff; ohne Konfiguration bleibt die
+Administration gesperrt (HTTP 503). Im Deployment ausschliesslich HTTPS
+verwenden. Zugangsdaten und `.env` niemals committen oder weitergeben.
+Nach Aenderungen der Zugangsdaten die Anwendung neu starten. Beim Deployment
+die Variablen beim Hosting-Anbieter setzen; die lokale `.env` wird nicht deployed.
+
+**Neue Airlines einpflegen** gleicht das komplette Airline-Verzeichnis
+und die Spielerzuordnungen ab und importiert die Flugplaene nur neuer Airlines.
+**Alle Airlines aktualisieren** liest das Verzeichnis, die Spielerzuordnungen
+und die Flugplaene aller Airlines des Servers neu ein. Beide Admin-Jobs
+lassen Flughafendaten und Koordinaten unveraendert. Kabinen und Serviceprofile
+sind separate, manuelle Import-/Exportdaten und werden nicht veraendert.
+
+Beide Aktionen laufen mit derselben Import-Sperre wie Einzelupdates und CLI.
+Die Seite zeigt Abschluss und Fehler an, merkt sich die Lauf-ID pro Browser-Tab
+und fragt nach erneutem Laden den Status weiter ab. Bei Prozessneustarts gelten
+dieselben Einschraenkungen wie fuer die Karten-Einzelupdates.
+
 ### Wochenplaner
 
 Basis und Ziele werden als dreistellige IATA-Codes eingegeben. Die Codes werden
@@ -71,12 +103,34 @@ Koordinaten aus OurAirports ergaenzen:
 python jobs\add_airport_coordinates.py --db-path data\hindenburg_v5.sqlite3
 ```
 
+Manston (MSE/EGMH, Airport-ID 1060) hat manuell ergaenzte Koordinaten:
+51.342201 N, 1.346110 E. Quelle: OurAirports, Eintrag
+<https://ourairports.com/airports/GB-1215/>. Der dort als geschlossen gefuehrte
+Flughafen besitzt keine IATA-/ICAO-Zuordnung mehr. Normale Datenupdates
+erhalten diese Koordinaten.
+
 ## Flugplaene und Schluessel
 
 `airlines.enterprise_id` ist die Ingame-ID der Airline/Enterprise und der
 Primaerschluessel des Airline-Verzeichnisses. Auch Holdings und Airlines ohne
 Fluege werden gespeichert. Name, Quell-URL, Aktivstatus, letzter erfolgreicher
 Flugplan-Abruf und letzter Fehler sind dort nachvollziehbar.
+
+`users` speichert oeffentlich sichtbare Spieler mit `user_id` (Ingame-ID),
+`username`, Quell-URL und letztem Sichtungszeitpunkt. `airlines.user_id`
+verweist auf den jeweiligen Managing director der Airline, auch bei
+Tochterunternehmen. Die Zuordnung wird bei Verzeichnis-Updates aus den
+Airline-Uebersichtsseiten gelesen. Fehlgeschlagene Abrufe lassen die bisherige
+Zuordnung bestehen und werden im Importlauf und bei der Airline gemeldet.
+Diese Spieler sind keine lokalen App-Logins und verleihen keinen Admin-Zugriff.
+
+`GET /api/players` liefert Spieler mit aktiven Airlines und deren Anzahl.
+Die Airline-Liste enthaelt nach der Migration auch `user_id` und `username`.
+`/api/flightplan/airlines?user_id=27` liefert alle aktiven Airlines eines
+Spielers. Alle Karten-/Analyse-Endpunkte unterstuetzen ebenfalls `user_id=27`
+anstelle von `enterprise_id` bzw. `enterprise_ids`, ohne Zwei-Airline-Limit.
+Unbekannte Spieler liefern keine Fluege, nicht den ungefilterten Gesamtbestand.
+Die sichtbare Karten-Auswahl bleibt vorerst die bestehende Airline-Auswahl.
 
 `flightplan_flights.id` ist eine interne, automatisch vergebene ID, nicht die
 Flugnummer. Eine Flugnummer kann in mehreren Airlines, auf mehreren Legs und
@@ -139,6 +193,18 @@ Alle Airlines samt Verzeichnis aktualisieren:
 
 ```powershell
 python jobs\refresh_flightplans.py --db-path data\hindenburg_v5.sqlite3
+```
+
+Zusaetzlich zu den Airline-Daten auch alle Flughafendaten aktualisieren (nur CLI):
+
+```powershell
+python jobs\refresh_flightplans.py --all-data --db-path data\hindenburg_v5.sqlite3
+```
+
+Nur nach neuen Airlines scannen:
+
+```powershell
+python jobs\refresh_flightplans.py --scan-new --db-path data\hindenburg_v5.sqlite3
 ```
 
 Nur eine Airline anhand ihrer Ingame-ID aktualisieren, ohne andere anzutasten:

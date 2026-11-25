@@ -15,6 +15,18 @@
         </header>
 
         <nav class="tool-grid" aria-label="Tool-Auswahl">
+            <a class="tool-card" href="{{ url_for('admin') }}">
+                <span class="tool-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z"/>
+                        <path d="m9 12 2 2 4-4"/>
+                    </svg>
+                </span>
+                <span class="tool-badge">Geschützter Zugang</span>
+                <h2>Admin</h2>
+                <p>Neue Airlines einpflegen und alle Airlines des Servers einschließlich der Flugpläne aktualisieren.</p>
+                <span class="tool-card-action">Administration öffnen <span aria-hidden="true">&rarr;</span></span>
+            </a>
             <a class="tool-card" href="{{ url_for('flightplan_map') }}">
                 <span class="tool-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
